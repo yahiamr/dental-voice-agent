@@ -1,7 +1,7 @@
 # Evaluation results
 
-This folder holds the saved results of the two evaluations. It is in Git, so every commit and tag
-keeps the scores it had when it was measured. The raw files behind each result (full
+This folder holds the saved evaluation results and the coverage report. It is in Git, so every
+commit and tag keeps the scores it had when it was measured. The raw files behind each result (full
 conversations, traces, calendars and raw model answers) stay in `runs/`, which Git ignores, and
 can be made again at any time by rerunning the commands below.
 
@@ -14,7 +14,7 @@ can be made again at any time by rerunning the commands below.
 | `coverage.md` | Test coverage: the guards and booking against the design's 85% target, then every file | `pytest --cov` and `coverage report` |
 | `scenarios-<provider>-<model>.md` and `.json` | A full run on another model, or with `-no-checker` at the end, with the checker off. Each setting keeps its own files, so it never replaces the main result | `evals/evaluate.py --provider ... --model ...` |
 
-## The two evaluations
+## The golden set and the scenarios
 
 They test different layers, and both are needed.
 
@@ -47,7 +47,7 @@ November 2026, 10:00, so the same free times are always on offer. A scenario pas
 | Column | Meaning |
 | --- | --- |
 | Scenario | Its name in `evals/scenarios.yaml`, where its lines and checks are written |
-| Stage | The stage that added it: 3 for reschedule and cancel, 4 for the core journeys |
+| Stage | The stage that added it: 3 for reschedule and cancel, 4 for the core journeys, 5 for handbook questions |
 | Passing runs | How many of its runs met every check |
 | Result | `pass` or `FAIL`, by the 2-of-3 rule |
 | Failures | Every reason a run failed, such as "actions were [], expected ['book']" or "the caller's lines ran out" |
@@ -118,8 +118,8 @@ piece, so whether the bot admits it does not know is checked by the scenarios, n
 
 ## Making the results again
 
-Both need the keys in `.env`. They make real API calls: a full scenario run is about 39 calls of a
-few model turns each, and takes about a minute.
+Both need the keys in `.env`. They make real API calls: a full scenario run is 63 calls (21
+scenarios, 3 runs each) of a few model turns each, and takes a minute or two.
 
 Scenarios, all of them, 3 runs each. This replaces `scenarios.md` and `scenarios.json`:
 

@@ -83,8 +83,8 @@ There is no real phone line, so a flag stands in for caller ID:
 uv run dental-agent chat --caller-phone +34600000001
 ```
 
-The first call prints the other sample numbers. To put the calendar back as it started, run
-`uv run dental-agent seed --reset`.
+Every call prints the sample numbers first, and with no flag you call as the first one, Lucía.
+To put the calendar back as it started, run `uv run dental-agent seed --reset`.
 
 ### Voice
 
@@ -121,15 +121,17 @@ The tests need no key and no network:
 uv run pytest
 ```
 
-The evaluations call the real model and save their results in `evals/results/`. The scenarios
-take about a minute:
+The scenarios call the real model, take a minute or two, and save a full run to
+`evals/results/`:
 
 ```bash
 uv run python -m evals.evaluate
 ```
 
+The search evaluation runs locally, with no key:
+
 ```bash
-uv run python -m evals.retrieval_eval
+uv run python -m evals.retrieval_eval --save evals/results/retrieval.md
 ```
 
 [evals/results/README.md](evals/results/README.md) explains each result and every option.
@@ -174,6 +176,8 @@ The call was stored as JSON. The transcript is left out here, and the action ID 
 ```json
 {
   "conversation_id": "c-20261109-100000-5619",
+  "started_at": "2026-11-09T10:00:00+01:00",
+  "ended_at": "2026-11-09T10:00:00+01:00",
   "caller_phone": "+34600999999",
   "details": {
     "name": "Ana Ruiz",
@@ -414,7 +418,8 @@ about the caller's own symptom still gets the medical line.
 
 ## Evaluation and results
 
-Four measures, each testing what the others cannot. All results are saved in Git under
+Four measures, each testing what the others cannot, plus voice timings from live calls. The
+results are saved in Git under
 [`evals/results/`](evals/results/), so every tag keeps the scores it had when it was measured,
 and [its README](evals/results/README.md) explains how to read and rerun each one.
 
@@ -427,7 +432,7 @@ and [its README](evals/results/README.md) explains how to read and rerun each on
 
 ### Tests
 
-`uv run pytest` runs 918 tests in a few seconds, with no key and no network. They prove the rules
+`uv run pytest` runs 918 tests in about 15 seconds, with no key and no network. They prove the rules
 decided in code: the yes rule, every booking rule, the notice period, double booking, the reply
 check, and what happens when a model, the speech service or the calendar fails. Graph tests use
 a scripted model that misbehaves on purpose: it invents a slot, claims a booking that never
@@ -470,9 +475,9 @@ it give medical advice, is it a plain yes. Each layer is scored on its own:
 Jev raised 1 false claim flag and 1 false advice flag in the 120 cases. A second, held-out set of
 14 cases, 10 of them emergencies, was written before anything ran: across both sets, Jev and the
 Haiku fallback each caught all 34 emergencies. One non-emergency, "I get short of breath on
-stairs, is there a lift?", sits right at Jev's cut-off and is sometimes flagged. Run it with
-`uv run python -m evals.intent_eval`. One author wrote every case, and 34 of 34 still allows a
-real miss rate of up to about 9% at 95% confidence; see Limits.
+stairs, is there a lift?", sits right at Jev's cut-off and is sometimes flagged. One author
+wrote every case, and 34 of 34 still allows a real miss rate of up to about 9% at 95%
+confidence; see Limits. The command for each layer is in the [results README](evals/results/README.md).
 
 ### Retrieval
 
