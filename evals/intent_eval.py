@@ -37,7 +37,9 @@ How to understand it:
 
     Timing is the full request time for one case, measured one case at a time after one warm-up
     call. A model that fails or returns broken JSON counts as answering nothing, which is how the
-    agent would treat it. Raw answers go to runs/intent_eval/, which Git ignores.
+    agent would treat it. Raw answers go to runs/intent_eval/, which Git ignores. --save PATH
+    also writes the reports as one page, such as evals/results/intent.md, which is in Git, so
+    each tag keeps the scores it had.
 
     Examples:
         uv run python -m evals.intent_eval --backend fixed
@@ -60,6 +62,7 @@ import contextlib
 import json
 import re
 import statistics
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -549,6 +552,38 @@ def load_cases(paths: list[Path]) -> dict:
     return cases
 
 
+def saved_page(reports: list[str], case_paths: list[Path], commit: str, date: str) -> str:
+    """Return the reports as one page for evals/results/, with what was run and when."""
+    files = ", ".join(f"`{_relative(path)}`" for path in case_paths)
+    header = f"# Intent check results\n\nCases: {files}. Commit: `{commit}`. Run on {date}.\n"
+    return header + "\n" + "\n\n".join(reports) + "\n"
+
+
+def _relative(path: Path) -> Path:
+    """Return the path from the repository root when it is inside it, so pages never name a
+    folder on one person's machine."""
+    try:
+        return Path(path).resolve().relative_to(Path.cwd().resolve())
+    except ValueError:
+        return Path(path)
+
+
+def _git_commit() -> str:
+    """Return the current commit, or "none"."""
+    try:
+        result = subprocess.run(
+            # --dirty marks uncommitted changes, as when a result is measured before the commit
+            # that saves it.
+            ["git", "describe", "--always", "--dirty", "--exclude=*"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "none"
+    return result.stdout.strip()
+
+
 def main() -> None:
     """Run the chosen backends on the chosen checks and print the report."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -559,6 +594,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--sides", action="store_true", help="Describe both answers to decision models."
+    )
+    parser.add_argument(
+        "--save",
+        type=Path,
+        help="Also save the reports as one page, such as evals/results/intent.md.",
     )
     args = parser.parse_args()
     backends = args.backend or ["fixed"]
@@ -571,15 +611,24 @@ def main() -> None:
     fixed = run(fixed_backend(clinic), cases, checks)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    reports = []
     for spec in backends:
         results = (
             fixed
             if spec == "fixed"
             else run(make_backend(spec, clinic, settings, args.sides), cases, checks)
         )
-        print(report(spec, results, fixed, cases), end="\n\n", flush=True)
+        reports.append(report(spec, results, fixed, cases))
+        print(reports[-1], end="\n\n", flush=True)
         safe = re.sub(r"[^a-zA-Z0-9.-]+", "_", spec)
         (OUT_DIR / f"{stamp}-{safe}.json").write_text(json.dumps(results, indent=1))
+    if args.save:
+        # In Git, unlike the raw answers in runs/, so each tag keeps the scores it had.
+        args.save.parent.mkdir(parents=True, exist_ok=True)
+        date = f"{datetime.now():%Y-%m-%d %H:%M}"
+        page = saved_page(reports, args.cases or [CASES_PATH], _git_commit(), date)
+        args.save.write_text(page)
+        print(f"Saved to {args.save}.")
 
 
 if __name__ == "__main__":

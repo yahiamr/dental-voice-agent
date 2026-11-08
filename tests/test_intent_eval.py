@@ -21,8 +21,16 @@ Used by:
     pytest
 """
 
+from pathlib import Path
+
 import pytest
-from evals.intent_eval import load_cases, product_backend, product_limits, product_says
+from evals.intent_eval import (
+    load_cases,
+    product_backend,
+    product_limits,
+    product_says,
+    saved_page,
+)
 from evals.system_gate import gate
 from tests.fakes import ScriptedChecker
 
@@ -130,3 +138,24 @@ def test_the_gate_counts_a_failed_backends_phrase_alarm_as_a_false_alarm():
     report = "\n".join(lines)
     assert "n01 (phrase, no checker answer)" in report
     assert "Phrase-only" not in report
+
+
+def test_the_saved_page_names_the_case_files_and_commit_and_keeps_every_report():
+    page = saved_page(
+        ["## fixed\n| row |", "## jev\n| row |"],
+        [Path("evals/intent_cases.yaml"), Path("evals/intent_holdout_2.yaml")],
+        commit="abc1234",
+        date="2026-11-08 19:00",
+    )
+    assert page.startswith("# Intent check results")
+    assert "`evals/intent_cases.yaml`, `evals/intent_holdout_2.yaml`" in page
+    assert "Commit: `abc1234`" in page
+    assert "## fixed" in page and "## jev" in page
+
+
+def test_the_saved_page_shows_case_files_relative_to_the_repository():
+    # The page is committed, so it must not name a folder on one person's machine.
+    absolute = Path.cwd() / "evals" / "intent_cases.yaml"
+    page = saved_page(["## fixed"], [absolute], commit="abc1234", date="now")
+    assert "`evals/intent_cases.yaml`" in page
+    assert str(Path.cwd()) not in page
