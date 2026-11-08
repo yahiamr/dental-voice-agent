@@ -63,6 +63,10 @@ class CallState(BaseModel):
     details: Details = Field(default_factory=Details)
     offers: list[Offer] = Field(default_factory=list)  # A new search replaces these.
     found_appointments: list[Appointment] = Field(default_factory=list)
+    # The pieces the last search returned, each a heading and text. Tool results are dropped
+    # when a turn ends, so without these the model once took back a correct handbook answer on
+    # the next turn. A new search replaces them.
+    last_search: list[dict[str, str]] = Field(default_factory=list)
 
     # The change waiting for a yes, and whether its confirmation question was actually spoken.
     pending_action: PendingAction | None = None

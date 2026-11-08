@@ -1,2 +1,69 @@
-# About 15 labelled search questions with expected sources. Stage 5.
-# Includes rewordings such as "can I leave my car nearby".
+# Labelled search questions for the patient handbook. Stage 5.
+#
+# What this file is:
+#   The golden set for document search: questions a caller might ask, each labelled with the
+#   handbook pieces that answer it. evals/retrieval_eval.py runs them through keyword, vector
+#   and hybrid search and counts how often an answering piece is in the top 3.
+#
+# How to understand it:
+#   Each question has an id, the question as a caller would say it, its kind, and expected: the
+#   piece ids (see clinic/index.py, split_sections) any one of which answers it. Kinds:
+#     direct       Shares its key words with the answering piece.
+#     reworded     Asks in words the piece does not use, so keyword search should struggle.
+#     lookalike    Shares words with a piece that does not answer it, such as cleaning the
+#                  instruments against the cleaning treatment.
+#     odd_place    The answer sits somewhere a reader would not look first, such as the FAQ.
+#     unanswerable The handbook does not answer it, so expected is empty. These are not scored
+#                  for search, because search always returns its closest pieces. The scenarios
+#                  check the bot says it does not know.
+#   The questions are the caller's own words, not the key terms the model would search with,
+#   so these scores are a harder test than a real call, where the model rewrites the question.
+#   tests/test_retrieval_eval.py checks every expected id exists, so editing a heading in the
+#   handbook without updating this file fails the tests.
+
+questions:
+  # Direct.
+  - {id: d01, kind: direct, question: "Where is the nearest metro station?", expected: [finding-us/by-metro-and-bus]}
+  - {id: d02, kind: direct, question: "Is there parking at the clinic?", expected: [finding-us/by-car]}
+  - {id: d03, kind: direct, question: "What should I bring to my first visit?", expected: [your-first-visit/what-to-bring]}
+  - {id: d04, kind: direct, question: "What are your opening hours?", expected: [opening-hours-and-contact]}
+  - {id: d05, kind: direct, question: "Do you accept Bizum?", expected: [paying-for-your-treatment]}
+  - {id: d06, kind: direct, question: "Do you send appointment reminders?", expected: [booking-an-appointment/appointment-reminders]}
+  - {id: d07, kind: direct, question: "Do you sell gift vouchers?", expected: [treatments-and-prices/gift-vouchers]}
+  - {id: d08, kind: direct, question: "How do I make a complaint?", expected: [feedback-and-complaints]}
+  - {id: d09, kind: direct, question: "Is the clinic open on Saturdays?", expected: [opening-hours-and-contact]}
+  - {id: d10, kind: direct, question: "Do you validate parking tickets?", expected: [finding-us/by-car]}
+
+  # Reworded: no key word in common with the answer.
+  - {id: w01, kind: reworded, question: "Can I come in a wheelchair?", expected: [finding-us/step-free-access, frequently-asked-questions/do-you-have-a-toilet-for-patients]}
+  - {id: w02, kind: reworded, question: "Is there somewhere to leave my car nearby?", expected: [finding-us/by-car]}
+  - {id: w03, kind: reworded, question: "What happens if I just don't turn up?", expected: [changing-or-cancelling-an-appointment/late-cancellations-and-missed-appointments]}
+  - {id: w04, kind: reworded, question: "My mouth still feels frozen after the injection", expected: [after-your-visit/after-a-filling]}
+  - {id: w05, kind: reworded, question: "I'm terrified of dentists, can you help?", expected: [frequently-asked-questions/do-you-see-patients-who-are-nervous-about-the-dentist]}
+  - {id: w06, kind: reworded, question: "Can I spread the cost over a few months?", expected: [paying-for-your-treatment]}
+  - {id: w07, kind: reworded, question: "Will my European health card work at your clinic?", expected: [dental-insurance/visitors-from-other-countries]}
+  - {id: w08, kind: reworded, question: "How long do you keep the recording of this call?", expected: [your-records-and-privacy, opening-hours-and-contact/the-automated-phone-assistant]}
+  - {id: w09, kind: reworded, question: "I need a receipt with my tax number for my company", expected: [paying-for-your-treatment/receipts-and-invoices]}
+
+  # Look-alikes: a wrong piece shares the words.
+  - {id: l01, kind: lookalike, question: "How do you clean your instruments?", expected: [hygiene-and-safety]}
+  - {id: l02, kind: lookalike, question: "How long does a cleaning appointment take?", expected: [treatments-and-prices, booking-an-appointment, frequently-asked-questions/can-i-have-a-check-up-and-a-cleaning-on-the-same-day]}
+  - {id: l03, kind: lookalike, question: "What if the dentist cancels my appointment?", expected: [changing-or-cancelling-an-appointment/if-we-need-to-move-your-appointment]}
+  - {id: l04, kind: lookalike, question: "Can I cancel an appointment that's tomorrow?", expected: [changing-or-cancelling-an-appointment]}
+  - {id: l05, kind: lookalike, question: "Do you do silver fillings?", expected: [treatments-and-prices/filling]}
+  - {id: l06, kind: lookalike, question: "My teeth are sensitive after whitening", expected: [after-your-visit/after-whitening]}
+  - {id: l07, kind: lookalike, question: "Do you offer dental implants?", expected: [about-the-clinic/what-we-do-and-what-we-do-not-do, treatments-and-prices/treatments-we-refer-elsewhere]}
+
+  # Odd places: the answer is not where a reader would look first.
+  - {id: o01, kind: odd_place, question: "Can my partner pay for my treatment?", expected: [frequently-asked-questions/can-i-pay-for-my-partner-s-treatment]}
+  - {id: o02, kind: odd_place, question: "Can I book for my wife from my phone?", expected: [becoming-a-patient/one-phone-number-one-patient]}
+  - {id: o03, kind: odd_place, question: "Do you treat children?", expected: [treatments-and-prices/children-s-appointments, about-the-clinic/what-we-do-and-what-we-do-not-do]}
+  - {id: o04, kind: odd_place, question: "Is there a toilet I can use?", expected: [frequently-asked-questions/do-you-have-a-toilet-for-patients]}
+  - {id: o05, kind: odd_place, question: "Can my 16-year-old have whitening?", expected: [treatments-and-prices/whitening, treatments-and-prices]}
+
+  # Unanswerable: the handbook does not say.
+  - {id: u01, kind: unanswerable, question: "Do you do Botox?", expected: []}
+  - {id: u02, kind: unanswerable, question: "Can I bring my dog?", expected: []}
+  - {id: u03, kind: unanswerable, question: "Is there a vending machine?", expected: []}
+  - {id: u04, kind: unanswerable, question: "Do you sell electric toothbrushes?", expected: []}
+  - {id: u05, kind: unanswerable, question: "Can I get a COVID test at the clinic?", expected: []}

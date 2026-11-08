@@ -225,7 +225,8 @@ class ReplyDecision(BaseModel):
     text: str
     replaced: bool
     # Why the text was replaced or dropped. "question", "time" and "service" apply to a lead-in
-    # only. "phone" means a clinic number was corrected and the text still passed.
+    # only. "phone" means a clinic number was corrected and the text still passed. "sourced"
+    # means the checker flagged advice, but the text only repeats this turn's search results.
     reason: (
         Literal[
             "claim",
@@ -236,14 +237,17 @@ class ReplyDecision(BaseModel):
             "model_claim",
             "model_advice",
             "phone",
+            "sourced",
         ]
         | None
     ) = None
 
 
 class SearchResult(BaseModel):
-    """One document section returned by a search."""
+    """One document piece returned by a search."""
 
     text: str
-    source: str
-    score: float
+    source: str  # The document's file name.
+    score: float  # Higher is better. Its scale depends on the search that made it.
+    heading: str = ""  # The heading path, such as "Finding us › By car".
+    piece_id: str = ""  # The piece's stable id, used by the retrieval evaluation.

@@ -12,7 +12,9 @@ What it contains:
       prepare_booking for a booking search, and prepare_reschedule for a move search.
     - lookup_appointment: this caller's active appointments still to come, up to 5.
     - get_clinic_facts: services, prices, hours or rules from clinic.yaml.
-    - search_clinic_info: searches the clinic documents, from Stage 5.
+    - search_clinic_info: searches the patient handbook, and returns up to 3 pieces, each with
+      its heading path, its text cut at MAX_PIECE_CHARS, and its source, with a message telling
+      the model to answer only from them. An empty search says to give the clinic number.
 
 How to understand it:
     These can run freely because they change nothing in the calendar. Slot and appointment IDs
@@ -43,6 +45,19 @@ from dental_agent.tools.schemas import (
 
 MAX_OFFERS = 2  # Two choices are easy to follow by ear.
 MAX_APPOINTMENTS = 5  # A limit, so a spoken list stays short.
+MAX_PIECE_CHARS = 1000  # A search piece longer than this is cut, so results stay short.
+
+# Sent with every search result, because the model decides here what to say. A search always
+# returns its closest pieces, even when none of them answers the question.
+SEARCH_MESSAGE = (
+    "Answer only from what these pieces say. If they do not answer the question, say you do "
+    "not have that information and give the clinic number. Prices, hours and booking rules "
+    "come from get_clinic_facts and the booking tools, which win if they differ."
+)
+NOTHING_FOUND_MESSAGE = (
+    "Nothing in the clinic documents matches. Say you do not have that information and give "
+    "the clinic number."
+)
 
 # Sent with every search result, because the model decides here. With the rule only in the
 # system prompt, live calls still asked "Would you like me to book that?" after finding the exact
@@ -208,5 +223,26 @@ def search_clinic_info(
         results = deps.retriever.search(args.question)
     except SearchUnavailable:
         return failure(ErrorCode.SEARCH_UNAVAILABLE, deps.clinic)
-    data = [{"text": item.text, "source": item.source} for item in results]
-    return ToolOutcome(result=ToolResult(ok=True, data=data))
+    # Traced, so an answer can be checked afterwards against what search actually returned.
+    deps.trace.event(
+        "search",
+        question=args.question,
+        pieces=[item.piece_id for item in results],
+        scores=[round(item.score, 4) for item in results],
+    )
+    data = [
+        {"heading": item.heading, "text": _cut(item.text), "source": item.source}
+        for item in results
+    ]
+    message = SEARCH_MESSAGE if data else NOTHING_FOUND_MESSAGE
+    # Kept for the next turn's Current Facts, so an answer from them is not taken back.
+    kept = [{"heading": item["heading"], "text": item["text"]} for item in data]
+    result = ToolResult(ok=True, data=data, message=message)
+    return ToolOutcome(result=result, updates={"last_search": kept})
+
+
+def _cut(text: str) -> str:
+    """Return the text, cut at a word near MAX_PIECE_CHARS, with an ellipsis if it was cut."""
+    if len(text) <= MAX_PIECE_CHARS:
+        return text
+    return text[:MAX_PIECE_CHARS].rsplit(" ", 1)[0] + "…"

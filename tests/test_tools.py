@@ -170,6 +170,69 @@ def test_get_clinic_facts_rejects_an_unknown_topic(state, deps):
     assert outcome.result.error_code is ErrorCode.UNKNOWN_TOPIC
 
 
+def searchable(deps, tmp_path, text):
+    """Point the deps at a keyword index built from this text."""
+    from dental_agent.clinic.index import build_index
+    from dental_agent.clinic.retriever import KeywordRetriever
+
+    docs = tmp_path / "handbook.md"
+    docs.write_text(text)
+    build_index([docs], tmp_path / "rag.sqlite", None)
+    deps.graph.retriever = KeywordRetriever(tmp_path / "rag.sqlite")
+
+
+def test_search_returns_each_pieces_heading_text_and_source(state, deps, tmp_path):
+    searchable(deps, tmp_path, "# H\n\n## Finding us\n\n### By car\n\nNo parking here.\n")
+    outcome = run("search_clinic_info", state, deps, {"question": "parking"})
+    assert outcome.result.ok
+    assert outcome.result.data == [
+        {"heading": "Finding us › By car", "text": "No parking here.", "source": "handbook.md"}
+    ]
+
+
+def test_a_search_traces_the_pieces_it_returned(state, deps, tmp_path):
+    # So an answer can be checked afterwards against what search actually gave the model.
+    searchable(deps, tmp_path, "# H\n\n## Finding us\n\n### By car\n\nNo parking here.\n")
+    run("search_clinic_info", state, deps, {"question": "parking"})
+    [event] = [item for item in deps.graph.trace.events if item["kind"] == "search"]
+    assert event["question"] == "parking"
+    assert event["pieces"] == ["finding-us/by-car"]
+    assert len(event["scores"]) == 1
+
+
+def test_a_search_keeps_its_pieces_for_the_next_turn(state, deps, tmp_path):
+    # Tool results are dropped when a turn ends. A live call then took back a correct
+    # handbook answer on the next turn, so the pieces stay in state until the next search.
+    searchable(deps, tmp_path, "# H\n\n## Finding us\n\n### By car\n\nNo parking here.\n")
+    outcome = run("search_clinic_info", state, deps, {"question": "parking"})
+    assert outcome.updates["last_search"] == [
+        {"heading": "Finding us › By car", "text": "No parking here."}
+    ]
+
+
+def test_an_empty_search_clears_the_last_pieces(state, deps, tmp_path):
+    searchable(deps, tmp_path, "# H\n\n## By car\n\nNo parking here.\n")
+    outcome = run("search_clinic_info", state, deps, {"question": "dragons"})
+    assert outcome.updates["last_search"] == []
+
+
+def test_a_long_piece_is_cut_for_the_model(state, deps, tmp_path):
+    from dental_agent.tools.read_tools import MAX_PIECE_CHARS
+
+    searchable(deps, tmp_path, "# H\n\n## Parking\n\n" + "parking " * 400 + "\n")
+    text = run("search_clinic_info", state, deps, {"question": "parking"}).result.data[0]["text"]
+    assert len(text) <= MAX_PIECE_CHARS + 1
+    assert text.endswith("…")
+
+
+def test_a_search_that_finds_nothing_tells_the_model_to_say_so(state, deps, tmp_path):
+    searchable(deps, tmp_path, "# H\n\n## By car\n\nNo parking here.\n")
+    outcome = run("search_clinic_info", state, deps, {"question": "dragons"})
+    assert outcome.result.ok
+    assert outcome.result.data == []
+    assert "clinic" in outcome.result.message
+
+
 def test_search_without_an_index_returns_search_unavailable(state, deps):
     outcome = run("search_clinic_info", state, deps, {"question": "Where can I park?"})
     assert outcome.result.error_code is ErrorCode.SEARCH_UNAVAILABLE

@@ -15,6 +15,7 @@ Used by:
 """
 
 import json
+import time
 
 import pytest
 from tests.conftest import PAST_NEW, add_past_first_visit, build_test_deps
@@ -389,3 +390,114 @@ def test_the_start_line_lists_the_checker_backends_and_settings(run, tmp_path):
     assert start["checker_jev_model"] == "typesafe/jev-1.14"
     assert start["checker_cutoff"] == 0.5
     assert start["checker_jev_timeout_s"] == 1.0
+
+
+# Stage 5: a short spoken line while a tool round runs, so a voice caller is not left in silence.
+SEARCH = ("search_clinic_info", {"question": "parking"})
+
+
+def voice_speech(inputs):
+    """FakeSpeech that behaves like a voice backend, which is where the filler is spoken."""
+    speech = FakeSpeech(inputs)
+    speech.uses_tone = True
+    return speech
+
+
+def test_a_voice_tool_round_speaks_a_filler_line_before_the_answer(run, clinic):
+    speech = voice_speech(["Where can I park?"])
+    script = [tool_reply(SEARCH), text_reply("There is a car park nearby.")]
+    record, _, deps = run([], script, speech=speech)
+    assert speech.spoken[1] in clinic.filler_lines
+    assert speech.spoken[2] == "There is a car park nearby."
+    # The transcript keeps the order the caller heard.
+    assert record.transcript[2]["text"] in clinic.filler_lines
+    # The trace marks it as a filler, not speech, so delay is measured to the real answer.
+    lines = [json.loads(line) for line in deps.graph.trace.path.read_text().splitlines()]
+    events = [event for line in lines for event in line.get("events", [])]
+    assert [event["kind"] for event in events].count("filler") == 1
+    assert deps.graph.on_tool_round is None  # The hook never outlives the call.
+
+
+def test_the_filler_is_said_once_a_turn_however_many_rounds(run, clinic):
+    speech = voice_speech(["Where can I park, and is Tuesday free?"])
+    run([], [tool_reply(SEARCH), tool_reply(FIND), text_reply("Here you go.")], speech=speech)
+    assert sum(line in clinic.filler_lines for line in speech.spoken) == 1
+
+
+def test_no_filler_before_a_confirmation_question(run, clinic):
+    # A prepare round goes straight to the system's question, so a filler would only delay it.
+    speech = voice_speech(["Book me"])
+    run([], [tool_reply(SAVE, FIND), tool_reply(PREPARE)], speech=speech)
+    fillers = [line for line in speech.spoken if line in clinic.filler_lines]
+    assert len(fillers) == 1  # Only for the save and search round, not the prepare round.
+    assert speech.spoken[-1].startswith("Just to confirm")
+
+
+def test_no_filler_when_the_only_round_prepares(run, clinic):
+    speech = voice_speech(["Book me"])
+    run([], [tool_reply(PREPARE)], speech=speech)
+    assert not any(line in clinic.filler_lines for line in speech.spoken)
+
+
+def test_text_chat_has_no_filler(run, clinic):
+    _, speech, _ = run(["Where can I park?"], [tool_reply(SEARCH), text_reply("Nearby.")])
+    assert not any(line in clinic.filler_lines for line in speech.spoken)
+
+
+def test_a_failed_filler_does_not_break_the_turn(run, clinic):
+    class FailingFiller(FakeSpeech):
+        def speak(self, text, asks_confirmation=False):
+            if text in clinic.filler_lines:
+                raise RuntimeError("speaker unplugged")
+            return super().speak(text, asks_confirmation)
+
+    speech = FailingFiller(["Where can I park?"])
+    speech.uses_tone = True
+    run([], [tool_reply(SEARCH), text_reply("There is a car park nearby.")], speech=speech)
+    assert speech.spoken[-1] == "There is a car park nearby."
+
+
+def test_an_emergency_never_hears_a_filler_before_the_112_line(run, clinic):
+    # The urgent phrase stops the turn before any tool runs, and flag_urgent never gets one.
+    speech = voice_speech(["I can't breathe"])
+    run([], [tool_reply(("flag_urgent", {"level": "life_threatening"}))], speech=speech)
+    assert not any(line in clinic.filler_lines for line in speech.spoken)
+    assert any("112" in line for line in speech.spoken)
+
+
+class SlowFiller(FakeSpeech):
+    """Voice speech whose filler line takes a while, as a real one does."""
+
+    uses_tone = True
+
+    def __init__(self, inputs, filler_lines):
+        super().__init__(inputs)
+        self.filler_lines = filler_lines
+
+    def speak(self, text, asks_confirmation=False):
+        if text in self.filler_lines:
+            time.sleep(0.2)
+        return super().speak(text, asks_confirmation)
+
+
+def test_a_turn_with_no_reply_waits_for_its_filler_before_writing_the_trace(run, clinic):
+    # A search round starts the filler, then the call ends with nothing more to say.
+    speech = SlowFiller(["Where can I park? That's all, bye."], clinic.filler_lines)
+    _, _, deps = run([], [tool_reply(SEARCH), tool_reply(END)], speech=speech)
+    lines = [json.loads(line) for line in deps.graph.trace.path.read_text().splitlines()]
+    turn = next(line for line in lines if line.get("turn") == 1)
+    assert "filler" in [event["kind"] for event in turn["events"]]
+
+
+def test_a_filler_that_could_not_be_spoken_is_not_in_the_transcript(run, clinic):
+    class FailingFiller(FakeSpeech):
+        uses_tone = True
+
+        def speak(self, text, asks_confirmation=False):
+            if text in clinic.filler_lines:
+                raise RuntimeError("speaker unplugged")
+            return super().speak(text, asks_confirmation)
+
+    speech = FailingFiller(["Where can I park?"])
+    record, _, _ = run([], [tool_reply(SEARCH), text_reply("Nearby.")], speech=speech)
+    assert not any(item["text"] in clinic.filler_lines for item in record.transcript)

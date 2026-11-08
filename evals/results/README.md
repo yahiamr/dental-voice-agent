@@ -10,6 +10,7 @@ can be made again at any time by rerunning the commands below.
 | `scenarios.md` | Whole calls on the real model: one row per scenario, with passing runs and any failures | `evals/evaluate.py` |
 | `scenarios.json` | The same numbers in a form a script can compare. The next full run is compared with it | `evals/evaluate.py` |
 | `intent.md` | The golden set: how well each layer reads meaning in single messages | `evals/intent_eval.py --save` |
+| `retrieval.md` | Document search: how often keyword, vector and hybrid search find the piece that answers a labelled question | `evals/retrieval_eval.py --save` |
 | `scenarios-<provider>-<model>.md` and `.json` | A full run on another model, or with `-no-checker` at the end, with the checker off. Each setting keeps its own files, so it never replaces the main result | `evals/evaluate.py --provider ... --model ...` |
 
 ## The two evaluations
@@ -98,6 +99,22 @@ the "Combined" lines show what would be written.
 The id prefixes are `e` for emergency cases, `n` for non-emergencies, `r` for replies, `y` for
 plain yeses and `x` for replies that are not a plain yes.
 
+## Reading `retrieval.md`
+
+Each labelled question in `evals/retrieval_questions.yaml` is a caller's own words with the
+handbook pieces that answer it. A hit means one of those pieces is among the 3 the model would
+see.
+
+| Column | Meaning |
+| --- | --- |
+| Hits at 3, Hit rate | Questions with an answering piece in the top 3 |
+| MRR at 5 | Mean reciprocal rank: 1 when the answer is always first, 0.5 when it is usually second |
+| direct, reworded, lookalike, odd_place | The same hits by kind of question: sharing words, sharing none, sharing words with a wrong piece, or answered somewhere unexpected |
+
+**Misses** lists the questions each search got wrong. **Unanswerable questions** shows what
+hybrid search returned for questions the handbook does not answer: it always returns its closest
+piece, so whether the bot admits it does not know is checked by the scenarios, not here.
+
 ## Making the results again
 
 Both need the keys in `.env`. They make real API calls: a full scenario run is about 39 calls of a
@@ -126,6 +143,12 @@ The golden set, for the fixed rules and both checkers. This replaces `intent.md`
 
 ```bash
 uv run python -m evals.intent_eval --backend fixed --backend jev:typesafe/jev-1.14 --backend anthropic:claude-haiku-5-5 --save evals/results/intent.md
+```
+
+Document search, which needs no API key, only the embedding model. This replaces `retrieval.md`:
+
+```bash
+uv run python -m evals.retrieval_eval --save evals/results/retrieval.md
 ```
 
 The held-out sets, `evals/intent_holdout.yaml` and `evals/intent_holdout_2.yaml`, are not part of

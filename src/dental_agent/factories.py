@@ -6,8 +6,9 @@ What this file is:
 
 What it contains:
     - create_llm: a chat model from init_chat_model, with a timeout and one SDK retry.
-    - create_embeddings: an embedding model from init_embeddings, or nothing if not installed.
-    - create_retriever: hybrid search, or keyword search with no embeddings.
+    - create_embeddings: the FastEmbed model, or None when it cannot load.
+    - create_retriever: builds or refreshes the search index, then returns hybrid search, keyword
+      search when there is no embedding model, or no search when there are no documents.
     - create_checkpointer: in-memory by default, SQLite with an optional extra.
     - create_speech: text mode always gets TextSpeech, and voice mode gets DeepgramSpeech.
     - create_checker: the checker chain, with each listed backend whose key is set.
@@ -19,12 +20,13 @@ How to understand it:
     Deps from fakes, so test code stays out of production config.
 
 Uses:
-    config.py, deps.py, clinic/retriever.py, speech/
+    config.py, deps.py, clinic/index.py, clinic/embedder.py, clinic/retriever.py, speech/
 
 Used by:
     cli.py, evals/evaluate.py
 """
 
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any, Literal
@@ -38,7 +40,13 @@ from dental_agent.checker import CheckerChain
 from dental_agent.checker.anthropic import AnthropicChecker
 from dental_agent.checker.jev import JevChecker
 from dental_agent.clinic.data import load_clinic
-from dental_agent.clinic.retriever import NoRetriever, Retriever
+from dental_agent.clinic.index import Embedder, ensure_index
+from dental_agent.clinic.retriever import (
+    HybridRetriever,
+    KeywordRetriever,
+    NoRetriever,
+    Retriever,
+)
 from dental_agent.clock import Clock
 from dental_agent.config import Settings
 from dental_agent.deps import Deps, GraphDeps
@@ -73,6 +81,9 @@ CHECKPOINT_TYPES = (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def create_llm(settings: Settings) -> Any:
     """Build the chat model chosen in settings, or exit naming what is missing."""
     # Settings that only one provider understands.
@@ -102,21 +113,46 @@ def create_llm(settings: Settings) -> Any:
     )
 
 
-def create_embeddings(settings: Settings) -> Any | None:
-    """Build the embedding model, or return None if the embeddings extra is not installed."""
-    try:
-        import langchain_huggingface  # noqa: F401
-    except ImportError:
+def create_embeddings(settings: Settings) -> Embedder | None:
+    """Build the embedding model, or return None so search falls back to keywords.
+
+    The first run downloads the model, so with no network it cannot load. A call must still
+    work then, so any failure is logged and keyword search is used instead.
+    """
+    if settings.embedding_provider == "none":
         return None
-    # Imported here, because this path needs the extra.
-    from langchain.embeddings import init_embeddings
+    try:
+        from dental_agent.clinic.embedder import FastEmbedder
 
-    return init_embeddings(settings.embedding_model, provider=settings.embedding_provider)
+        return FastEmbedder(settings.embedding_model, settings.models_dir)
+    except Exception as error:  # A missing package, no network, or an unknown model.
+        logger.warning("Embedding model unavailable, so search uses keywords only: %s", error)
+        return None
 
 
-def create_retriever(settings: Settings, embeddings: Any | None) -> Retriever:
-    """Build document search. Stage 5 adds keyword and hybrid search here."""
-    return NoRetriever()
+def create_retriever(settings: Settings, embeddings: Embedder | None) -> Retriever:
+    """Build or refresh the index, then return hybrid search, keyword search or none.
+
+    The index is rebuilt only when a document or the embedding model has changed. If embedding
+    fails, a keyword-only index is built. With no documents, or no index at all, search is
+    unavailable and the agent gives the clinic number. Booking never depends on any of this.
+    """
+    docs = sorted(Path(settings.docs_dir).glob("*.md"))
+    if not docs:
+        return NoRetriever()
+    rag_path = Path(settings.rag_path)
+    if embeddings is not None:
+        try:
+            ensure_index(docs, rag_path, embeddings)
+            return HybridRetriever(rag_path, embeddings)
+        except Exception as error:  # The model loaded but failed while embedding.
+            logger.warning("Vector index failed, so search uses keywords only: %s", error)
+    try:
+        ensure_index(docs, rag_path, None)
+        return KeywordRetriever(rag_path)
+    except Exception as error:  # Booking must never fail because search did.
+        logger.warning("Search index failed, so search is unavailable: %s", error)
+        return NoRetriever()
 
 
 def create_checkpointer(settings: Settings) -> Any:

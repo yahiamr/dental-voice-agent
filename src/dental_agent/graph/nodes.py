@@ -1,4 +1,4 @@
-"""One small function per graph step. Stage: 1, 2 and 3.
+"""One small function per graph step. Stage: 1, 2, 3 and 5.
 
 What this file is:
     The steps of a turn. Each function reads state and returns only the fields it changes.
@@ -22,7 +22,9 @@ What it contains:
       patient's name. A move or cancel uses the name and service on the appointment. A checked
       sentence from the model may go before it. The checker is asked about that sentence only
       when there is one.
-    - check_model_reply: checks the model's reply, with the checker's claim and advice flags.
+    - check_model_reply: checks the model's reply, with the checker's claim and advice flags,
+      and this turn's search results, so the handbook's own text is not called advice.
+    - search_texts(turn_messages): the document text search returned this turn.
     - use_fixed_line: picks a fixed line when something stopped the turn.
     - end_turn: adds the turn to messages. Every path ends here.
 
@@ -307,6 +309,12 @@ def run_tools(state: CallState, deps: GraphDeps) -> dict[str, Any]:
         ToolCall(id=item["id"], name=item["name"], args=item["args"])
         for item in state.turn_messages[-1].tool_calls
     ]
+    if deps.on_tool_round is not None:
+        # This runs after await_emergency, so a filler line can never come before 112.
+        try:
+            deps.on_tool_round([call.name for call in calls])
+        except Exception as error:  # A filler line must never cost the turn.
+            logger.warning("Tool round hook failed: %s", error)
     round_result = run_tool_round(calls, state, deps)
     # Every tool call gets one matching answer, which the next model call requires.
     answers = [
@@ -367,6 +375,7 @@ def ask_confirmation(state: CallState, deps: GraphDeps) -> dict[str, Any]:
             deps.clinic,
             model_claim=claim,
             model_advice=advice,
+            sources=_reply_sources(state, deps),
         )
         deps.trace.event(
             "guard",
@@ -397,6 +406,7 @@ def check_model_reply(state: CallState, deps: GraphDeps) -> dict[str, Any]:
         deps.settings.max_reply_sentences,
         model_claim=claim,
         model_advice=advice,
+        sources=_reply_sources(state, deps),
     )
     deps.trace.event(
         "guard",
@@ -477,6 +487,42 @@ def _trace_checker(deps: GraphDeps, step: str, answer: Any) -> None:
 def _past_deadline(state: CallState, deps: GraphDeps) -> bool:
     """Return True if this turn has run out of time."""
     return deps.clock.now() > state.turn_deadline_at
+
+
+def _reply_sources(state: CallState, deps: GraphDeps) -> list[str]:
+    """Return the clinic's own text the reply checks may accept: this turn's search results and
+    the last search's pieces, which Current Facts repeats on the next turn, plus the clinic's
+    fixed lines when there are any, such as "The dentist can advise you at your visit", which
+    the prompt asks for after an aftercare answer. With no search in the call so far, nothing is
+    accepted, so a fixed line can never excuse advice of the model's own."""
+    found = search_texts(state.turn_messages) + [item["text"] for item in state.last_search]
+    if not found:
+        return []
+    # Filled in, so a line such as call_clinic holds the number the model actually says.
+    return [*found, *(deps.clinic.line(key) for key in deps.clinic.lines)]
+
+
+def search_texts(turn_messages: list[Any]) -> list[str]:
+    """Return the text of every document piece search_clinic_info returned this turn.
+
+    The reply checks accept the clinic's own handbook text even when the checker calls it
+    advice, so they need exactly what search gave the model, and nothing else.
+    """
+    texts = []
+    for message in turn_messages:
+        if not isinstance(message, ToolMessage):
+            continue
+        try:
+            data = json.loads(message.content).get("data")
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if isinstance(data, list):
+            texts += [
+                item["text"]
+                for item in data
+                if isinstance(item, dict) and "heading" in item and "text" in item
+            ]
+    return texts
 
 
 def _write(state: CallState, deps: GraphDeps, action: PendingAction) -> ActionRecord:

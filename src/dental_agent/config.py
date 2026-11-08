@@ -14,7 +14,8 @@ What it contains:
     - The checker: checker_enabled (the on/off switch), checker_backends, the two model names,
       the two time limits and the cut-off.
       See docs/designs/checker_model.md.
-    - Paths: calendar_path, rag_path, clinic_path, checkpoint_path, docs_dir, runs_dir.
+    - Paths: calendar_path, rag_path, clinic_path, checkpoint_path, docs_dir, models_dir,
+      runs_dir.
     - Keys as SecretStr fields, so they do not print by accident.
 
 How to understand it:
@@ -48,8 +49,10 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 2000
     # How hard an Anthropic model thinks. Low keeps a spoken turn fast.
     llm_effort: Literal["low", "medium", "high"] = "low"
-    embedding_provider: Literal["huggingface"] = "huggingface"
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # Vector search embeds with FastEmbed, which runs small models on ONNX, with no PyTorch.
+    # "none" means keyword search only, which the tests use so they never download a model.
+    embedding_provider: Literal["fastembed", "none"] = "fastembed"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
     speech_backend: Literal["deepgram", "local"] = "deepgram"
     checkpointer: Literal["memory", "sqlite"] = "memory"
 
@@ -95,6 +98,7 @@ class Settings(BaseSettings):
     rag_path: Path = Path("data/rag.sqlite")
     checkpoint_path: Path = Path("data/checkpoints.sqlite")
     docs_dir: Path = Path("data/docs")
+    models_dir: Path = Path("data/models")  # Downloaded embedding models. Git ignores it.
     runs_dir: Path = Path("runs")
 
     @field_validator("checker_backends", mode="before")

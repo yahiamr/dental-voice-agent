@@ -7,7 +7,7 @@ What it contains:
     - ScriptedModel: plays a list of model responses.
     - FakeSpeech: scripted input, and it records what was spoken.
     - FailingCalendar: raises before or after a write.
-    - FakeEmbeddings: fixed vectors.
+    - FakeEmbedder: word-count vectors for the search index, with no model download.
     - ScriptedChecker: a checker backend that plays a list of answers or errors.
 
 How to understand it:
@@ -212,3 +212,26 @@ class ScriptedChecker:
         if isinstance(result, Exception):
             raise result
         return result
+
+
+class FakeEmbedder:
+    """Stands in for FastEmbed with no download. Texts sharing a listed word point the same way.
+
+    Each listed word is one direction, so a question about parking lands near the parking text.
+    A text with none of the words gets the same small vector as every other such text.
+    """
+
+    name = "fake-embedder"
+    dimensions = 4
+    WORDS = ("car", "parking", "metro", "euros")
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [self._vector(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._vector(text)
+
+    def _vector(self, text: str) -> list[float]:
+        lowered = text.lower()
+        values = [float(lowered.count(word)) for word in self.WORDS]
+        return values if any(values) else [0.1, 0.1, 0.1, 0.1]

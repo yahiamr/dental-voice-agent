@@ -1,4 +1,4 @@
-"""The outer loop of one call. Stage: 1.
+"""The outer loop of one call. Stage: 1 and 5.
 
 What this file is:
     Runs a call from greeting to goodbye. It is the only code that touches speech, the
@@ -11,7 +11,12 @@ What it contains:
       patient with their name, and any other number is a new patient.
     - Start: checks keys and data files, creates the conversation record, speaks the greeting.
       The trace's start line names the speech backend really in use.
-    - Turn: transcribe, graph.invoke, speak, save.
+    - Turn: transcribe, graph.invoke, speak, save. On a voice call, a filler line such as "One
+      moment." plays on its own thread while a tool round and the next model call run: once a
+      turn, only when a model call follows, never before a confirmation question or 112. It is
+      traced as a filler, so delay figures time the real reply, and the turn waits for it
+      before writing the trace. A filler that could not be spoken is left out of the
+      transcript. Text chat has none.
     - Finish: reads actions from the calendar, speaks the closing lines, writes the outcome and
       summary.
     - Handling for silence, transcription errors, low confidence, graph errors and the Endings
@@ -32,8 +37,10 @@ Used by:
 """
 
 import logging
+import random
 import secrets
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -54,6 +61,12 @@ MAX_TROUBLE = 2
 
 # Added to the greeting when the backend plays a tone.
 TONE_NOTE = " Please speak after the tone."
+
+# A round with one of these tools goes straight to a fixed reply, such as the confirmation
+# question or the goodbye, with no model call after it, so a filler line would only delay it.
+NO_FILLER_TOOLS = frozenset(
+    {"prepare_booking", "prepare_reschedule", "prepare_cancel", "end_call", "flag_urgent"}
+)
 
 # Settings copied to the trace's start line, so a run can be explained later.
 TRACED_SETTINGS = (
@@ -160,6 +173,11 @@ class _Call:
         self.end_reason: EndReason | None = None
         self.last_actions: list[ActionRecord] = []  # What the calendar last showed.
         self.first_run_fields: dict[str, Any] = {}  # Sent with the first graph run only.
+        self.filler: threading.Thread | None = None  # This turn's filler line, while it plays.
+        self.filler_said = False  # At most one filler line a turn.
+        # Only a voice call fills silence: in text chat the reply simply appears.
+        if self.speech.uses_tone:
+            self.services.on_tool_round = self._fill_silence
 
     def run(self) -> ConversationRecord:
         """Start, take turns until the call ends, then finish on every handled exit."""
@@ -231,6 +249,8 @@ class _Call:
             else:
                 self._run_graph(heard.text)
 
+        # A turn with no reply never reached _say, so its filler may still be playing.
+        self._wait_for_filler()
         tools_used = any(item["kind"] == "tool_call" for item in self.services.trace.events)
         self.services.trace.flush(turn=self.turn, tools_used=tools_used)
         self.record.save(self.settings.runs_dir)
@@ -260,6 +280,7 @@ class _Call:
 
     def _run_graph(self, text: str) -> None:
         """Run one graph turn, then speak its reply."""
+        self.filler_said = False
         turn_input = {"last_caller_text": text, "awaiting_yes": self.awaiting_yes}
         turn_input |= self.first_run_fields
         try:
@@ -329,8 +350,47 @@ class _Call:
             logger.warning("Could not read actions: %s", error)
         self.record.actions = [_stored_action(item) for item in self.last_actions]
 
+    def _fill_silence(self, tool_names: list[str]) -> None:
+        """Start a short filler line, once a turn, while a tool round and model call run.
+
+        The graph calls this from run_tools. The line plays on its own thread, so the tools and
+        the next model call carry on, and _say waits for it before the real reply. It is traced
+        as a filler, not as speech, so the delay figures still time the real reply.
+        """
+        if self.filler_said or NO_FILLER_TOOLS.intersection(tool_names):
+            return
+        self.filler_said = True
+        line = random.choice(self.clinic.filler_lines)
+
+        # Recorded now, so the transcript keeps the order the caller heard.
+        entry = {"role": "bot", "text": line, "printed_only": False}
+        self.record.transcript.append(entry)
+
+        def speak() -> None:
+            try:
+                result = self.speech.speak(line)
+                ok, timings = result.ok, result.timings
+            except Exception as error:  # A failed filler is only a missed courtesy.
+                logger.warning("Filler line failed: %s", error)
+                ok, timings = False, {}
+            if not ok:
+                # The caller never heard it. Nothing else writes the transcript until
+                # _wait_for_filler has joined this thread, so removing it here is safe.
+                self.record.transcript.remove(entry)
+            self.services.trace.event("filler", text=line, ok=ok, timings=timings)
+
+        self.filler = threading.Thread(target=speak, name="filler", daemon=True)
+        self.filler.start()
+
+    def _wait_for_filler(self) -> None:
+        """Let a filler line finish, so two lines never play at once."""
+        if self.filler is not None:
+            self.filler.join()
+            self.filler = None
+
     def _say(self, text: str, asks_confirmation: bool = False) -> bool:
         """Speak one line and record it. A line that cannot be spoken is printed."""
+        self._wait_for_filler()
         try:
             result = self.speech.speak(text, asks_confirmation=asks_confirmation)
             spoke, timings = result.ok, result.timings
@@ -350,6 +410,8 @@ class _Call:
 
     def _finish(self) -> None:
         """Say the closing lines, then write the outcome and summary."""
+        self._wait_for_filler()
+        self.services.on_tool_round = None  # The hook belongs to this call only.
         reason = self.end_reason or EndReason.CRASH
         ending = ENDINGS[reason]
 

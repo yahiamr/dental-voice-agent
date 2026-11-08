@@ -124,6 +124,12 @@ def state_block(state: CallState, actions: list[ActionRecord], clock: Clock, cli
     else:
         lines.append("Found appointments: none")
 
+    if state.last_search:
+        # Tool results are dropped when a turn ends, so the evidence for a handbook answer is
+        # repeated here. Without it, a live call took back a correct answer on the next turn.
+        lines.append("Handbook pieces from your last search (an answer you gave from them stands):")
+        lines += [f"- {item['heading']}: {item['text']}" for item in state.last_search]
+
     if actions:
         lines.append("Actions written in this call:")
         lines += [f"- {action.result_text}" for action in actions]

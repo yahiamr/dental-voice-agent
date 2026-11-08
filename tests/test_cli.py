@@ -15,6 +15,8 @@ Used by:
 
 import builtins
 import json
+import os
+from pathlib import Path
 
 import pytest
 from tests.conftest import PROJECT_ROOT, TEST_NOW
@@ -101,9 +103,20 @@ def test_seed_reset_replaces_the_data(project):
     assert Calendar(project / "data" / "calendar.sqlite").slot_count() > 0
 
 
-def test_index_says_it_is_not_available_yet(project, capsys):
-    cli.main(["index"])
-    assert "not available" in capsys.readouterr().out
+def test_index_builds_the_search_index(project, capsys, monkeypatch):
+    # --keyword-only, so the test downloads no embedding model.
+    monkeypatch.setenv("DOCS_DIR", str(PROJECT_ROOT / "data" / "docs"))
+    cli.main(["index", "--keyword-only"])
+    out = capsys.readouterr().out
+    assert "pieces" in out and "keyword only" in out
+    # conftest points RAG_PATH at a temporary file, so the project's own index is never touched.
+    assert Path(os.environ["RAG_PATH"]).is_file()
+
+
+def test_index_with_no_documents_says_so(project, capsys, monkeypatch):
+    monkeypatch.setenv("DOCS_DIR", str(project / "no-docs"))
+    cli.main(["index", "--keyword-only"])
+    assert "No documents" in capsys.readouterr().out
 
 
 def test_old_data_gets_a_warning(project, capsys, clinic):

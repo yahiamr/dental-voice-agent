@@ -262,7 +262,7 @@ def test_the_scenario_file_loads_with_unique_names():
     scenarios = load_scenarios(SCENARIOS_PATH)
     names = [item.name for item in scenarios]
     assert len(names) == len(set(names))
-    assert len(scenarios) == 13
+    assert len(scenarios) == 19
 
 
 @pytest.mark.parametrize("scenario", load_scenarios(SCENARIOS_PATH), ids=lambda item: item.name)

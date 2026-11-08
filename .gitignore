@@ -17,6 +17,8 @@ htmlcov/
 # Generated data
 runs/
 data/*.sqlite
+# Embedding models FastEmbed downloads on first use.
+data/models/
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite-journal

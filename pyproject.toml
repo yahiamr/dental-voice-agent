@@ -9,19 +9,20 @@ description = "A voice agent that books, moves and cancels appointments for a fi
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "langgraph>=1.2",          # The turn graph and the checkpointer.
-    "langchain>=1.4",          # init_chat_model and init_embeddings, for provider choice.
+    "langchain>=1.4",          # init_chat_model, for provider choice.
     "langchain-anthropic>=1.7", # The default model provider.
     "anthropic>=2.6",           # The Haiku checker calls the SDK directly.
     "pydantic>=2.7",           # Typed state, tool inputs and records.
     "pydantic-settings",       # Loads settings from the environment and .env.
     "pyyaml",                  # Reads data/clinic.yaml.
     "holidays",                # Public holidays, for closed days.
+    "fastembed>=0.9.1",        # Embeds the clinic documents for vector search, with no PyTorch.
+    "sqlite-vec>=0.1.9",       # Stores and searches those vectors inside SQLite.
 ]
 
 [project.optional-dependencies]
 voice-deepgram = ["deepgram-sdk>=7", "sounddevice", "numpy"]
 voice-local = ["parakeet-mlx", "kokoro", "silero-vad", "sounddevice", "numpy"]
-embeddings = ["langchain-huggingface", "sentence-transformers", "sqlite-vec"]
 openrouter = ["langchain-openrouter"]
 checkpoint-sqlite = ["langgraph-checkpoint-sqlite"]
 

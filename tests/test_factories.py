@@ -6,7 +6,8 @@ What this file is:
 What it contains:
     - create_llm returns a chat model with tool binding.
     - create_checkpointer defaults to in-memory.
-    - create_retriever falls back to keyword search.
+    - create_embeddings builds FastEmbed, or returns None when it is missing or cannot load.
+    - create_retriever builds the index and picks hybrid, keyword or no search.
     - normalise_stop treats unknown values as cut_off.
     - A missing key or extra exits naming it.
     - create_checker builds only the backends whose key is present, and CHECKER_BACKENDS is read
@@ -17,14 +18,16 @@ Used by:
 """
 
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
+from tests.fakes import FakeEmbedder
 
-from dental_agent.clinic.retriever import NoRetriever
+from dental_agent.clinic.retriever import HybridRetriever, KeywordRetriever, NoRetriever
 from dental_agent.config import Settings
 from dental_agent.deps import normalise_stop
 from dental_agent.factories import (
@@ -117,13 +120,90 @@ def test_a_missing_sqlite_extra_exits_with_the_install_command(monkeypatch):
     assert "uv sync --extra checkpoint-sqlite" in str(caught.value)
 
 
-def test_create_embeddings_returns_none_when_not_installed(monkeypatch):
-    monkeypatch.setitem(sys.modules, "langchain_huggingface", None)
-    assert create_embeddings(settings()) is None
+def fake_fastembed(monkeypatch, fail=False):
+    """Install a stand-in fastembed module, so no test downloads a model."""
+    module = ModuleType("fastembed")
+
+    class TextEmbedding:
+        @staticmethod
+        def list_supported_models():
+            return [{"model": "BAAI/bge-small-en-v1.5", "dim": 384}]
+
+        def __init__(self, model_name, cache_dir=None):
+            if fail:
+                raise OSError("no network")
+            self.model_name, self.cache_dir = model_name, cache_dir
+
+        def passage_embed(self, texts):
+            return ([1.0] * 384 for _ in texts)
+
+        def query_embed(self, text):
+            return iter([[0.5] * 384])
+
+    module.TextEmbedding = TextEmbedding
+    monkeypatch.setitem(sys.modules, "fastembed", module)
 
 
-def test_create_retriever_has_no_search_before_stage_5():
-    assert isinstance(create_retriever(settings(), None), NoRetriever)
+def test_create_embeddings_builds_fastembed_with_the_configured_model(monkeypatch, tmp_path):
+    fake_fastembed(monkeypatch)
+    embedder = create_embeddings(
+        settings(embedding_provider="fastembed", models_dir=tmp_path / "models")
+    )
+    assert embedder.name == "BAAI/bge-small-en-v1.5"
+    assert embedder.dimensions == 384
+    assert len(embedder.embed_passages(["a", "b"])) == 2
+    assert len(embedder.embed_query("a")) == 384
+
+
+def test_create_embeddings_returns_none_when_fastembed_is_missing(monkeypatch):
+    monkeypatch.setitem(sys.modules, "fastembed", None)
+    assert create_embeddings(settings(embedding_provider="fastembed")) is None
+
+
+def test_create_embeddings_returns_none_when_the_model_cannot_load(monkeypatch, tmp_path):
+    # With no network on the first run, search falls back to keywords rather than failing.
+    fake_fastembed(monkeypatch, fail=True)
+    no_network = settings(embedding_provider="fastembed", models_dir=tmp_path / "models")
+    assert create_embeddings(no_network) is None
+
+
+def test_the_none_provider_means_keyword_search_only():
+    assert create_embeddings(settings(embedding_provider="none")) is None
+
+
+def search_settings(tmp_path, text="# H\n\n## By car\n\nThere is no parking.\n"):
+    """Settings whose documents and index live in tmp_path."""
+    docs = tmp_path / "docs"
+    docs.mkdir(exist_ok=True)
+    (docs / "handbook.md").write_text(text)
+    return settings(docs_dir=docs, rag_path=tmp_path / "rag.sqlite")
+
+
+def test_create_retriever_builds_keyword_search_with_no_embeddings(tmp_path):
+    retriever = create_retriever(search_settings(tmp_path), None)
+    assert isinstance(retriever, KeywordRetriever)
+    assert retriever.search("parking")[0].heading == "By car"
+
+
+def test_create_retriever_builds_hybrid_search_with_embeddings(tmp_path):
+    retriever = create_retriever(search_settings(tmp_path), FakeEmbedder())
+    assert isinstance(retriever, HybridRetriever)
+    assert retriever.search("car")[0].heading == "By car"
+
+
+def test_create_retriever_has_no_search_without_documents(tmp_path):
+    empty = settings(docs_dir=tmp_path / "none", rag_path=tmp_path / "rag.sqlite")
+    assert isinstance(create_retriever(empty, None), NoRetriever)
+
+
+def test_create_retriever_falls_back_to_keywords_when_embedding_fails(tmp_path):
+    class BrokenEmbedder(FakeEmbedder):
+        def embed_passages(self, texts):
+            raise RuntimeError("model crashed")
+
+    retriever = create_retriever(search_settings(tmp_path), BrokenEmbedder())
+    assert isinstance(retriever, KeywordRetriever)
+    assert retriever.search("parking")
 
 
 def test_text_mode_always_gets_text_speech():
@@ -271,3 +351,10 @@ def test_checker_enabled_is_read_from_the_environment(monkeypatch):
     assert settings().checker_enabled is False
     monkeypatch.setenv("CHECKER_ENABLED", "true")
     assert settings().checker_enabled is True
+
+
+def test_tests_never_use_the_real_search_index():
+    # Running the suite once wrote a keyword-only data/rag.sqlite into the project.
+    real = (Path(__file__).parent.parent / "data").resolve()
+    assert real not in Settings().rag_path.resolve().parents
+    assert real not in Settings().models_dir.resolve().parents

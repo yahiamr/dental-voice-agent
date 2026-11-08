@@ -1,4 +1,4 @@
-"""Containers for ready-made services. Stage: 1.
+"""Containers for ready-made services. Stage: 1 and 5.
 
 What this file is:
     Holds the objects the rest of the code needs, and turns provider stop reasons into one
@@ -6,7 +6,8 @@ What this file is:
 
 What it contains:
     - GraphDeps: model, checkpointer, calendar, clock, clinic data, retriever, trace sink,
-      settings, the checker chain, and the emergency check in flight.
+      settings, the checker chain, the emergency check in flight, and on_tool_round, a hook
+      the session sets on a voice call to speak a filler line while tools run.
     - Deps: GraphDeps plus speech.
     - normalise_stop(response): returns complete or cut_off.
 
@@ -23,6 +24,7 @@ Used by:
     factories.py, graph/, tools/, session.py
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -56,6 +58,9 @@ class GraphDeps:
     # The emergency check running alongside the main model, by conversation ID. It holds a
     # running request, not call state, so it is kept here rather than in the checkpoint.
     pending_emergency: dict[str, Any] = field(default_factory=dict)
+    # Called by run_tools with the round's tool names, before they run. The session sets it on
+    # a voice call to speak a filler line. Nothing else may depend on it being set.
+    on_tool_round: Callable[[list[str]], None] | None = None
 
 
 @dataclass

@@ -34,6 +34,7 @@ def test_every_fixed_line_key_exists():
         "cannot_finish",
         "call_clinic",
         "medical",
+        "dentist_referral",
         "emergency",
         "urgent_message",
         "no_search",

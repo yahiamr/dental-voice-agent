@@ -1,13 +1,21 @@
-"""Checks the model's text before it is spoken. Stage: 1 and 3.
+"""Checks the model's text before it is spoken. Stage: 1, 3 and 5.
 
 What this file is:
     The last check on anything the model wrote.
 
 What it contains:
     - check_reply(text, actions, found_appointments, clinic, max_sentences, model_claim,
-      model_advice) -> ReplyDecision.
+      model_advice, sources) -> ReplyDecision.
     - check_lead_in(text, service_id, actions, found_appointments, clinic, model_claim,
-      model_advice) -> ReplyDecision.
+      model_advice, sources) -> ReplyDecision.
+    - repeats_sources(text, sources): whether every statement repeats the clinic's own text.
+      The checker's advice flag alone does not replace such a reply (reason "sourced"): the
+      handbook's aftercare text is the clinic's, not the model's. Each statement, including any
+      question but a plain offer of more help, needs 75% of its meaningful words in one source
+      sentence or pair, every number, no order word swapped for its opposite ("after" for
+      "before"), the same negations, and a shared pair of neighbouring words in every clause,
+      so an instruction cannot ride on a long handbook sentence. A dosing word is never
+      excused, and claims are still checked.
     - combine_reply(phrase_claim, dosing_hit, model_claim, model_advice): whether a claim and
       whether advice is flagged, by either layer. The eval uses it too.
     - claimed_kinds(text, claim_phrases): the kinds of change the text claims, leaving out a
@@ -60,8 +68,11 @@ Used by:
 """
 
 import re
+from collections.abc import Sequence
+from itertools import pairwise
 
 from dental_agent.clinic.data import Clinic, Service
+from dental_agent.clinic.retriever import FILLER_WORDS
 from dental_agent.models import ActionRecord, Appointment, ReplyDecision
 from dental_agent.sentences import status_text
 
@@ -95,6 +106,28 @@ MIN_PHONE_DIGITS = 6
 MAX_PHONE_EDITS = 2
 
 
+# How much of a statement must be in one search result for it to count as repeated.
+SOURCE_OVERLAP = 0.75
+# Words that flip a meaning, so a repeated statement must keep every one of them.
+NEGATIONS = frozenset({"not", "no", "never", "cannot", "without", "nothing", "nobody"})
+# Numbers as words, which a repeated statement must also keep exactly.
+_NUMBER_TEXT = """
+one two three four five six seven eight nine ten eleven twelve fifteen twenty thirty forty fifty
+sixty hundred half
+"""
+NUMBER_WORDS = frozenset(_NUMBER_TEXT.split())
+# Words of order or amount, with their opposites. Search drops some of them as filler, but
+# "before eating" and "after eating" mean different things, so a statement may not use one
+# where its source has only the opposite. "after a local anaesthetic" for "if you had a local
+# anaesthetic" is still fine.
+OPPOSITES = {"before": "after", "more": "less", "most": "least"}
+OPPOSITES |= {second: first for first, second in OPPOSITES.items()}
+ORDER_WORDS = frozenset(OPPOSITES)
+# The only words a question may have and still be skipped, such as "Is there anything else I
+# can help with?". Any other question must repeat the sources too, so advice cannot hide in one.
+OFFER_WORDS = frozenset({"anything", "else", "help", "today", "other", "something", "question"})
+
+
 def combine_reply(
     phrase_claim: bool, dosing_hit: bool, model_claim: bool, model_advice: bool
 ) -> tuple[bool, bool]:
@@ -110,10 +143,13 @@ def check_reply(
     max_sentences: int,
     model_claim: bool = False,
     model_advice: bool = False,
+    sources: Sequence[str] = (),
 ) -> ReplyDecision:
     """Check the model's reply, and return the text that is safe to speak.
 
     model_claim and model_advice are the checker's answers. Both false gives the result on main.
+    sources are the texts search returned this turn. A reply that only repeats them is the
+    clinic's own written text, so the checker's advice flag alone does not replace it.
     """
     # Step 1: clean text meant for a screen. Markdown and IDs must never be read aloud.
     cleaned = re.sub(r"[*_#`]", "", text)
@@ -127,7 +163,10 @@ def check_reply(
     _, advice = combine_reply(bool(matched), dosing_hit, model_claim, model_advice)
 
     # Step 3: medical advice is never allowed, so advice from either layer replaces the reply.
-    if advice:
+    # The one exception: the checker's flag alone, on a reply that only repeats the clinic's
+    # own handbook. A dosing word is never excused, whatever the source says.
+    excused = advice and not dosing_hit and repeats_sources(cleaned, sources)
+    if advice and not excused:
         reason = "dosing" if dosing_hit else "model_advice"
         return ReplyDecision(text=clinic.line("medical"), replaced=True, reason=reason)
 
@@ -151,8 +190,111 @@ def check_reply(
             return ReplyDecision(text=status_text(results), replaced=True, reason="model_claim")
 
     # Step 5: trim, because long replies are hard to follow by ear.
-    reason = "phone" if fixed else None
+    reason = "sourced" if excused else "phone" if fixed else None
     return ReplyDecision(text=_trim(cleaned, max_sentences), replaced=False, reason=reason)
+
+
+def repeats_sources(text: str, sources: Sequence[str]) -> bool:
+    """Return True if every statement in the text repeats the search results.
+
+    A statement is any sentence except an offer such as "Is there anything else I can help
+    with?", a question made only of OFFER_WORDS. It repeats a source sentence, or two
+    neighbouring ones, when at least SOURCE_OVERLAP of its meaningful words are there, every
+    number in it is there, no order word stands where the source has only its opposite, and it
+    has exactly the same negations, so "two to three hours" cannot become "five hours",
+    "before eating" cannot become "after eating", and "take care not to bite" cannot lose its
+    "not". One statement that repeats nothing makes the
+    whole reply the model's own.
+    """
+    statements = [item for item in _sentences(text) if not _is_offer(item)]
+    if not statements or not sources:
+        return False
+    # Each sentence, and each pair of neighbouring sentences, since a reply may join two.
+    windows: list[list[str]] = []
+    for source in sources:
+        sentences = [_words(item) for item in _sentences(source)]
+        windows += sentences + [a + b for a, b in pairwise(sentences)]
+    return all(_repeats(statement, windows) for statement in statements)
+
+
+def _sentences(text: str) -> list[str]:
+    """Split text into sentences at full stops, question marks and exclamation marks."""
+    return [item for item in re.split(r"(?<=[.!?])\s+", text.strip()) if item]
+
+
+def _is_offer(sentence: str) -> bool:
+    """Return True for a question that offers more help and says nothing of its own."""
+    return sentence.rstrip().endswith("?") and set(_meaningful(sentence)) <= OFFER_WORDS
+
+
+def _meaningful(text: str) -> list[str]:
+    """Return the words that carry meaning: all but filler, keeping negations and order words."""
+    kept = NEGATIONS | ORDER_WORDS
+    return [word for word in _words(text) if word not in FILLER_WORDS or word in kept]
+
+
+def _repeats(statement: str, windows: list[list[str]]) -> bool:
+    """Return True if this one statement repeats one window of source sentences.
+
+    Besides the overlap, numbers, order words and negations, every clause of two or more
+    meaningful words must share a pair of neighbouring words with the window. Word overlap
+    alone let an instruction ride on a long handbook sentence ("…before eating anything hot,
+    and hold ice on it"), because most of the sentence matched. A paraphrase keeps some of the
+    handbook's word pairs ("not bite", "two three"), and an added instruction has none.
+    """
+    clauses = _clauses(statement)
+    words = _meaningful(statement)
+    if not words:
+        return True  # Nothing meaningful, such as "OK.", says nothing of its own.
+    numbers = {word for word in words if word.isdigit() or word in NUMBER_WORDS}
+    orders = {word for word in words if word in ORDER_WORDS}
+    negations = {word for word in words if word in NEGATIONS}
+    for window in windows:
+        available = set(window)
+        same_negations = negations == {word for word in window if word in NEGATIONS}
+        # An order word the source lacks, where the source has its opposite, flips the meaning.
+        swapped = any(word not in available and OPPOSITES[word] in available for word in orders)
+        shared = sum(word in available for word in words)
+        if (
+            same_negations
+            and not swapped
+            and numbers <= available
+            and shared >= SOURCE_OVERLAP * len(words)
+            and all(clause & _pairs(window) for clause in clauses)
+        ):
+            return True
+    return False
+
+
+# Where a statement splits into clauses, so an added instruction is checked on its own.
+CLAUSE_BREAK = re.compile(r"[,;:()]|\b(?:and|so|but|then|or|while)\b")
+
+
+def _clauses(statement: str) -> list[set[tuple[str, str]]]:
+    """Return the word pairs of each clause with two or more meaningful words."""
+    pairs = [_pairs(_words(part)) for part in CLAUSE_BREAK.split(statement)]
+    return [item for item in pairs if item]
+
+
+def _pairs(words: list[str]) -> set[tuple[str, str]]:
+    """Return the neighbouring pairs of meaningful word stems, such as ("not", "bite")."""
+    kept = NEGATIONS | ORDER_WORDS
+    stems = [_stem(word) for word in words if word not in FILLER_WORDS or word in kept]
+    return set(pairwise(stems))
+
+
+def _stem(word: str) -> str:
+    """Return a rough stem, so "wears" and "wear", or "eating" and "eat", compare equal."""
+    for suffix in ("ing", "ed", "es", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[: -len(suffix)]
+    return word
+
+
+def _words(text: str) -> list[str]:
+    """Return lowercase words, with "n't" turned into "not", so negations compare equal."""
+    text = re.sub(r"n't\b", " not", text.lower().replace("’", "'"))
+    return re.findall(r"[a-z0-9]+", text)
 
 
 def fix_phone_numbers(text: str, numbers: list[str]) -> tuple[str, bool]:
@@ -235,13 +377,16 @@ def check_lead_in(
     clinic: Clinic,
     model_claim: bool = False,
     model_advice: bool = False,
+    sources: Sequence[str] = (),
 ) -> ReplyDecision:
     """Check the sentence the model sent with a prepare call. A failed one becomes empty."""
     if not text.strip():
         return ReplyDecision(text="", replaced=False)
 
     # Step 1: the normal reply check, cut to one sentence. A replaced reply is dropped whole.
-    base = check_reply(text, actions, found_appointments, clinic, 1, model_claim, model_advice)
+    base = check_reply(
+        text, actions, found_appointments, clinic, 1, model_claim, model_advice, sources
+    )
     if base.replaced:
         return ReplyDecision(text="", replaced=True, reason=base.reason)
 

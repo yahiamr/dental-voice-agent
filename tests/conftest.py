@@ -5,6 +5,7 @@ What this file is:
 
 What it contains:
     - A FixedClock at Monday 9 November 2026, 10:00.
+    - no_embedding_model: every test uses keyword search, so none loads a model.
     - A temporary seeded calendar.
     - clinic.yaml as sample data.
     - build_test_deps(model=None, speech=None, calendar=None, clock=None), which fills unset
@@ -42,6 +43,19 @@ TEST_NOW = datetime(2026, 11, 9, 10, 0, tzinfo=MADRID)
 
 # Found from this file, so tests work from any folder.
 PROJECT_ROOT = Path(__file__).parent.parent
+
+
+@pytest.fixture(autouse=True)
+def no_embedding_model(monkeypatch, tmp_path):
+    """Keep every test on keyword search, with its index and models in tmp_path.
+
+    No test loads or downloads the embedding model, and none writes data/rag.sqlite, which a
+    test run once did. Tests of the FastEmbed path ask for it with embedding_provider=
+    "fastembed" and a stand-in fastembed module.
+    """
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "none")
+    monkeypatch.setenv("RAG_PATH", str(tmp_path / "test-rag.sqlite"))
+    monkeypatch.setenv("MODELS_DIR", str(tmp_path / "test-models"))
 
 
 @pytest.fixture

@@ -42,10 +42,15 @@ lines:
   cannot_finish: "I'm sorry, I can't finish this here."
   call_clinic: "Please call the clinic on {clinic_line}."
   medical: "I can't give medical advice. Please ask the dentist at your visit."
+  dentist_referral: "The dentist can advise you at your visit."
   emergency: "If this is an emergency, call 112."
   urgent_message: "This sounds like an emergency. Please call 112 now. Our urgent line is {urgent_line}."
   no_search: "I don't have that information here. Please call the clinic on {clinic_line}."
   unsupported: "I can't do that on this line yet. Please call the clinic on {clinic_line}."
+
+# Spoken on a voice call while a tool round runs, so the caller is not left in silence for the
+# extra model call. One is picked at random, once a turn. See session.py.
+filler_lines: ["One moment.", "Let me check that for you.", "Just a moment, please."]
 
 # Spoken when commit refuses an action, keyed by ErrorCode.
 refusal_lines:

@@ -416,3 +416,125 @@ def test_a_lead_in_with_a_shortened_clinic_number_is_corrected_and_kept(clinic):
     assert decision.text == f"You can also call the clinic on {clinic.clinic_line}."
     assert not decision.replaced
     assert decision.reason == "phone"
+
+
+# Stage 5: handbook text the model repeats may pass the checker's advice flag.
+AFTERCARE = (
+    "If you had a local anaesthetic, your lip and tongue may feel numb for two to three hours. "
+    "Take care not to bite them, and wait until the numbness has worn off before eating or "
+    "drinking anything hot."
+)
+REPEATED = (
+    "If you had a local anaesthetic, your lip and tongue may stay numb for two to three hours. "
+    "Try not to bite them, and wait until the numbness wears off before eating or drinking "
+    "anything hot. Is there anything else I can help with?"
+)
+
+
+def test_a_reply_that_repeats_a_search_result_passes_the_checkers_advice_flag(clinic):
+    decision = run(REPEATED, clinic, model_advice=True, sources=[AFTERCARE])
+    assert not decision.replaced
+    assert decision.reason == "sourced"
+    assert "two to three hours" in decision.text
+
+
+def test_a_changed_number_is_not_the_handbook_any_more(clinic):
+    changed = REPEATED.replace("two to three hours", "five to six hours")
+    assert run(changed, clinic, model_advice=True, sources=[AFTERCARE]).replaced
+
+
+def test_a_dropped_negation_is_not_the_handbook_any_more(clinic):
+    flipped = "Your lip may feel numb for two to three hours, so you can bite and eat hot food."
+    assert run(flipped, clinic, model_advice=True, sources=[AFTERCARE]).replaced
+
+
+def test_an_added_sentence_of_the_models_own_makes_it_advice_again(clinic):
+    added = REPEATED + " You should also rinse with warm salt water tonight."
+    decision = run(added, clinic, model_advice=True, sources=[AFTERCARE])
+    assert decision.replaced
+    assert decision.reason == "model_advice"
+
+
+def test_a_dosing_word_is_never_excused_by_a_source(clinic):
+    source = "After a filling you may take 400 mg of ibuprofen."
+    decision = run(source, clinic, model_advice=True, sources=[source])
+    assert decision.replaced
+    assert decision.reason == "dosing"
+
+
+def test_with_no_search_results_the_advice_flag_replaces_the_reply(clinic):
+    assert run(REPEATED, clinic, model_advice=True).replaced
+
+
+def test_a_sourced_reply_still_has_its_claims_checked(clinic):
+    source = "You're booked for a cleaning on Tuesday."
+    decision = run(source, clinic, model_advice=True, sources=[source])
+    assert decision.replaced
+    assert decision.reason == "claim"
+
+
+def test_a_lead_in_that_repeats_a_search_result_is_kept(clinic):
+    sentence = "A cleaning removes the hard deposits that brushing cannot."
+    source = "It removes the hard deposits (tartar) that brushing cannot, and polishes the teeth."
+    decision = check_lead_in(
+        sentence, "cleaning", [], [], clinic, model_advice=True, sources=[source]
+    )
+    assert decision.text == sentence
+
+
+@pytest.mark.parametrize(
+    "swapped",
+    [
+        REPEATED.replace("before eating", "after eating"),
+        "Numbness usually lasts more than three hours.",
+    ],
+)
+def test_a_changed_order_or_amount_word_is_not_the_handbook_any_more(clinic, swapped):
+    source = AFTERCARE + " Numbness usually lasts less than three hours."
+    assert run(swapped, clinic, model_advice=True, sources=[source]).replaced
+
+
+def test_advice_asked_as_a_question_is_not_excused(clinic):
+    asked = REPEATED + " Have you tried rinsing with warm salt water tonight?"
+    decision = run(asked, clinic, model_advice=True, sources=[AFTERCARE])
+    assert decision.replaced
+    assert decision.reason == "model_advice"
+
+
+# Second Stage 5 review: advice appended to an otherwise repeated sentence.
+@pytest.mark.parametrize(
+    "text",
+    [
+        (
+            "Take care not to bite them, and wait until the numbness has worn off before eating or "
+            "drinking anything hot, and hold ice on it."
+        ),
+        (
+            "If you had a local anaesthetic, your lip and tongue may feel numb for two to three "
+            "hours, and you can take a hot shower."
+        ),
+    ],
+)
+def test_an_instruction_appended_to_handbook_text_is_not_excused(text, clinic):
+    assert run(text, clinic, model_advice=True, sources=[AFTERCARE]).replaced
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The three wordings the live model used for the aftercare answer.
+        (
+            "If you had a local anaesthetic, your lip and tongue may stay numb for two to three "
+            "hours. Take care not to bite them, and wait until the numbness wears off before eating "
+            "or drinking anything hot."
+        ),
+        (
+            "If you had a local anaesthetic, your lip and tongue may stay numb for two to three "
+            "hours. Be careful not to bite them, and wait until the numbness wears off before "
+            "eating or drinking anything hot."
+        ),
+        "Your lip and tongue may feel numb for two to three hours after a local anaesthetic.",
+    ],
+)
+def test_paraphrases_of_the_handbook_are_still_excused(text, clinic):
+    assert not run(text, clinic, model_advice=True, sources=[AFTERCARE]).replaced

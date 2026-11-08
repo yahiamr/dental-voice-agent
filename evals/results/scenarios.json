@@ -1,13 +1,13 @@
 {
  "model": "anthropic:claude-haiku-5-5",
  "checker": true,
- "commit": "a49e633-dirty",
- "date": "2026-11-08 19:00",
+ "commit": "55c4556-dirty",
+ "date": "2026-11-08 21:46",
  "clock": "2026-11-09T10:00:00+01:00",
  "runs": 3,
  "pass_needed": 2,
- "passed_scenarios": 13,
- "total_scenarios": 13,
+ "passed_scenarios": 18,
+ "total_scenarios": 19,
  "scenarios": {
   "booking_with_correction_and_question": {
    "stage": 4,
@@ -99,11 +99,58 @@
    "runs": 3,
    "passed_scenario": true,
    "failures": []
+  },
+  "parking_question": {
+   "stage": 5,
+   "passed": 3,
+   "runs": 3,
+   "passed_scenario": true,
+   "failures": []
+  },
+  "insurance_question": {
+   "stage": 5,
+   "passed": 2,
+   "runs": 3,
+   "passed_scenario": true,
+   "failures": [
+    "the caller's lines ran out"
+   ]
+  },
+  "side_question_during_booking": {
+   "stage": 5,
+   "passed": 3,
+   "runs": 3,
+   "passed_scenario": true,
+   "failures": []
+  },
+  "unanswerable_question": {
+   "stage": 5,
+   "passed": 3,
+   "runs": 3,
+   "passed_scenario": true,
+   "failures": []
+  },
+  "aftercare_question": {
+   "stage": 5,
+   "passed": 1,
+   "runs": 3,
+   "passed_scenario": false,
+   "failures": [
+    "the bot never said 'hours'",
+    "the caller's lines ran out"
+   ]
+  },
+  "symptom_question": {
+   "stage": 5,
+   "passed": 3,
+   "runs": 3,
+   "passed_scenario": true,
+   "failures": []
   }
  },
  "guard_rejections": {
+  "check_model_reply": 5,
   "write_to_calendar": 3,
-  "check_emergency": 3,
-  "check_model_reply": 1
+  "check_emergency": 3
  }
 }

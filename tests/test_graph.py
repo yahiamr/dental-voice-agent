@@ -1084,3 +1084,128 @@ def test_an_appointment_for_a_service_no_longer_offered_still_reads_back(make_ca
     assert state.reply_text.startswith("Just to confirm: cancel your old whitening for Lucía")
     state = call.say("yes", awaiting_yes=True)
     assert state.reply_text.startswith("Your old whitening on ")
+
+
+# Stage 5: a reply that repeats this turn's search results is the clinic's own text.
+AFTERCARE_DOC = """# Handbook
+
+## After a filling
+
+If you had a local anaesthetic, your lip and tongue may feel numb for two to three hours.
+"""
+
+
+def with_handbook(call, tmp_path):
+    """Give the call a keyword index of a one-piece handbook."""
+    from dental_agent.clinic.index import build_index
+    from dental_agent.clinic.retriever import KeywordRetriever
+
+    docs = tmp_path / "handbook.md"
+    docs.write_text(AFTERCARE_DOC)
+    build_index([docs], tmp_path / "rag.sqlite", None)
+    call.deps.graph.retriever = KeywordRetriever(tmp_path / "rag.sqlite")
+    return call
+
+
+def test_a_reply_repeating_the_search_result_is_spoken_despite_the_advice_flag(make_call, tmp_path):
+    chain = checker_answers(NO_EMERGENCY, {"claims_change": False, "medical_advice": True})
+    reply = "Your lip and tongue may feel numb for two to three hours after a local anaesthetic."
+    call = with_handbook(
+        make_call(
+            tool_reply(("search_clinic_info", {"question": "numb filling"})),
+            text_reply(reply),
+            checker=chain,
+        ),
+        tmp_path,
+    )
+    state = call.say("How long does the numbness last after a filling?")
+    assert state.reply_text == reply
+    guards = [e for e in call.deps.graph.trace.events if e.get("name") == "check_model_reply"]
+    assert guards[-1]["reason"] == "sourced"
+
+
+def test_advice_beyond_the_search_result_still_becomes_the_medical_line(
+    make_call, tmp_path, clinic
+):
+    chain = checker_answers(NO_EMERGENCY, {"claims_change": False, "medical_advice": True})
+    reply = "Your lip may feel numb for two to three hours. Rinse with warm salt water tonight."
+    call = with_handbook(
+        make_call(
+            tool_reply(("search_clinic_info", {"question": "numb filling"})),
+            text_reply(reply),
+            checker=chain,
+        ),
+        tmp_path,
+    )
+    state = call.say("How long does the numbness last after a filling?")
+    assert state.reply_text == clinic.line("medical")
+
+
+def test_the_prompts_own_referral_sentence_does_not_undo_a_sourced_reply(make_call, tmp_path):
+    # A live run repeated the handbook, then added the referral the prompt asks for.
+    chain = checker_answers(NO_EMERGENCY, {"claims_change": False, "medical_advice": True})
+    reply = (
+        "Your lip and tongue may feel numb for two to three hours after a local anaesthetic. "
+        "The dentist can advise you further at your visit."
+    )
+    call = with_handbook(
+        make_call(
+            tool_reply(("search_clinic_info", {"question": "numb filling"})),
+            text_reply(reply),
+            checker=chain,
+        ),
+        tmp_path,
+    )
+    state = call.say("How long does the numbness last after a filling?")
+    assert state.reply_text == reply
+
+
+def test_a_clinic_line_with_its_number_filled_in_does_not_undo_a_sourced_reply(
+    make_call, tmp_path, clinic
+):
+    chain = checker_answers(NO_EMERGENCY, {"claims_change": False, "medical_advice": True})
+    reply = (
+        "Your lip and tongue may feel numb for two to three hours after a local anaesthetic. "
+        + clinic.line("call_clinic")
+    )
+    call = with_handbook(
+        make_call(
+            tool_reply(("search_clinic_info", {"question": "numb filling"})),
+            text_reply(reply),
+            checker=chain,
+        ),
+        tmp_path,
+    )
+    state = call.say("How long does the numbness last after a filling?")
+    assert state.reply_text == reply
+
+
+def test_fixed_lines_alone_never_excuse_advice_without_a_search(make_call, clinic):
+    chain = checker_answers(NO_EMERGENCY, {"claims_change": False, "medical_advice": True})
+    call = make_call(
+        text_reply("Rinse with salt water. The dentist can advise you at your visit."),
+        checker=chain,
+    )
+    assert call.say("My gum hurts").reply_text == clinic.line("medical")
+
+
+def test_the_next_turn_can_repeat_the_last_search_without_the_medical_line(make_call, tmp_path):
+    chain = checker_answers(
+        NO_EMERGENCY,
+        {"claims_change": False, "medical_advice": False},
+        NO_EMERGENCY,
+        {"claims_change": False, "medical_advice": True},
+    )
+    reply = "Your lip and tongue may feel numb for two to three hours after a local anaesthetic."
+    call = with_handbook(
+        make_call(
+            tool_reply(("search_clinic_info", {"question": "numb filling"})),
+            text_reply("Yes, I found that in the handbook."),
+            text_reply(reply),
+            checker=chain,
+        ),
+        tmp_path,
+    )
+    call.say("How long does the numbness last after a filling?")
+    state = call.say("Sorry, how long did you say?")
+    assert state.reply_text == reply

@@ -207,3 +207,81 @@ scenarios:
       actions: []
       outcome: no_action
       said: ["notice period", "910 000 001"]
+
+  # Stage 5: questions answered from the patient handbook (data/docs/patient-handbook.md).
+
+  - name: parking_question
+    stage: 5
+    caller: new
+    lines:
+      - "Is there anywhere to park near the clinic?"
+      - "OK, thanks, bye."
+    expect:
+      actions: []
+      tools: [search_clinic_info]
+      said: ["car park"]
+
+  - name: insurance_question
+    stage: 5
+    caller: new
+    lines:
+      - "Do you work with Salud Clara insurance?"
+      - "Great, thanks, bye."
+    expect:
+      actions: []
+      tools: [search_clinic_info]
+      said: ["Salud Clara"]
+
+  - name: side_question_during_booking
+    stage: 5
+    caller: sample
+    # The answer comes from the handbook or the clinic facts, alongside the booking.
+    lines:
+      - "I'd like a cleaning on Wednesday the 18th of November, in the morning. How long does a cleaning take?"
+      - "The first one, please."
+      - "That's all, bye."
+    expect:
+      actions: [book]
+      outcome: completed
+      # "minute" matches "30 minutes" and "a 30-minute appointment", but never a time like 09:30.
+      said: ["minute"]
+
+  - name: unanswerable_question
+    stage: 5
+    caller: new
+    # The handbook does not mention Botox. Search still returns its closest pieces, so the bot
+    # must say it does not know and give the clinic number, not guess.
+    lines:
+      - "Do you do Botox?"
+      - "OK, bye."
+    expect:
+      actions: []
+      tools: [search_clinic_info]
+      said: ["910 000 001"]
+
+  - name: aftercare_question
+    stage: 5
+    caller: sample
+    # A general question the handbook answers, read back without advice of the bot's own.
+    lines:
+      - "How long does the numbness last after a filling?"
+      - "OK, thanks, bye."
+    expect:
+      actions: []
+      tools: [search_clinic_info]
+      said: ["hours"]
+      not_said: ["mg", "ibuprofen", "paracetamol"]
+
+  - name: symptom_question
+    stage: 5
+    caller: sample
+    # About the caller's own symptom, so the bot gives no view of its own and sends them to
+    # the dentist. A first live run showed it does this without searching, which is the safe
+    # side, so the scenario checks the outcome, not the tool.
+    lines:
+      - "I had a filling this morning and my lip is still numb. Is that normal?"
+      - "OK, thanks, bye."
+    expect:
+      actions: []
+      said: ["dentist"]
+      not_said: ["mg", "ibuprofen", "paracetamol", "that's normal", "that is normal"]

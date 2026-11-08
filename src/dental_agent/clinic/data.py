@@ -35,6 +35,7 @@ REQUIRED_LINES = {
     "cannot_finish",
     "call_clinic",
     "medical",
+    "dentist_referral",
     "emergency",
     "urgent_message",
     "no_search",
@@ -104,6 +105,7 @@ class Clinic(BaseModel):
     negation_tokens: list[str]
     claim_phrases: dict[str, list[str]]
     dosing_words: list[str]
+    filler_lines: list[str]  # Spoken while a voice call's tool round runs. See session.py.
 
     @model_validator(mode="after")
     def check_required_keys(self) -> "Clinic":

@@ -188,3 +188,14 @@ def test_an_appointment_booked_in_this_call_has_no_notice_mark(clock, clinic):
     block = state_block(CallState(found_appointments=[soon]), [action()], clock, clinic)
     assert "(booked in this call)" in block
     assert "notice period, so" not in block
+
+
+def test_the_last_search_pieces_are_in_current_facts(clock, clinic):
+    pieces = [{"heading": "After your visit › After a filling", "text": "Numb for two hours."}]
+    block = state_block(CallState(last_search=pieces), [], clock, clinic)
+    assert "Handbook pieces from your last search" in block
+    assert "After your visit › After a filling: Numb for two hours." in block
+
+
+def test_with_no_search_there_is_no_handbook_section(clock, clinic):
+    assert "Handbook pieces" not in state_block(CallState(), [], clock, clinic)

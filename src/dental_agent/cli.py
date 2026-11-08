@@ -5,7 +5,8 @@ What this file is:
 
 What it contains:
     - seed [--reset]: creates the sample data.
-    - index [--with-embeddings]: builds the search index.
+    - index [--keyword-only]: rebuilds the search index. A call also builds it when it is
+      missing or out of date.
     - chat: runs a call by keyboard.
     - voice [--save-fixtures <dir>]: runs a call by microphone.
     - --caller-phone and --new-caller, which simulate caller ID.
@@ -31,11 +32,13 @@ import re
 import sys
 from collections.abc import Sequence
 from datetime import timedelta
+from pathlib import Path
 
 from dental_agent import factories
 from dental_agent.booking.calendar import Calendar
 from dental_agent.booking.seed import seed
 from dental_agent.clinic.data import load_clinic
+from dental_agent.clinic.index import build_index
 from dental_agent.clock import Clock
 from dental_agent.config import Settings
 from dental_agent.deps import Deps
@@ -65,8 +68,10 @@ def _parser() -> argparse.ArgumentParser:
     seed_command.add_argument("--reset", action="store_true", help="Replace existing data.")
     seed_command.set_defaults(run=_seed)
 
-    index_command = commands.add_parser("index", help="Build the search index.")
-    index_command.add_argument("--with-embeddings", action="store_true")
+    index_command = commands.add_parser("index", help="Rebuild the search index.")
+    index_command.add_argument(
+        "--keyword-only", action="store_true", help="Skip the embedding model and vectors."
+    )
     index_command.set_defaults(run=_index)
 
     chat_command = commands.add_parser("chat", help="Run a call by keyboard.")
@@ -114,8 +119,20 @@ def _seed(args: argparse.Namespace) -> None:
 
 
 def _index(args: argparse.Namespace) -> None:
-    """Build the search index. Stage 5 adds this."""
-    print("Indexing is not available yet.")
+    """Rebuild the search index from data/docs. This needs no API key.
+
+    A call builds or refreshes the index by itself, so this is only needed to force a rebuild,
+    or to build it before a call. The first build downloads the embedding model.
+    """
+    settings = Settings()
+    docs = sorted(Path(settings.docs_dir).glob("*.md"))
+    if not docs:
+        print(f"No documents to index in {settings.docs_dir}.")
+        return
+    embedder = None if args.keyword_only else factories.create_embeddings(settings)
+    count = build_index(docs, Path(settings.rag_path), embedder)
+    kind = f"with {embedder.name} vectors" if embedder else "keyword only"
+    print(f"Indexed {count} pieces from {len(docs)} document(s), {kind}, in {settings.rag_path}.")
 
 
 def _call(args: argparse.Namespace, mode: str) -> None:
