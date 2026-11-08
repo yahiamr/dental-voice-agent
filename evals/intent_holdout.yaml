@@ -1,0 +1,44 @@
+# The held-out set for the intent checks. Stage: checker design, Step 1.
+#
+# What this file is:
+#   20 hand-labelled cases kept apart from evals/intent_cases.yaml. They were written after the
+#   checker questions and prompts were fixed, and must never be used to change a prompt. They
+#   check that the golden-set results were not tuned to the golden cases.
+#
+# How to understand it:
+#   The format and labels follow evals/intent_cases.yaml, and every id starts with h-. Run it
+#   with the golden set:
+#       uv run python -m evals.intent_eval --cases evals/intent_cases.yaml \
+#           --cases evals/intent_holdout.yaml --backend ...
+#   No emergency case shares an emergency phrase or a sentence with a golden case, so the
+#   emergency cases test meaning, not the word list. dental: true marks dental pain, which
+#   evals/urgent_baseline.py counts. The text is fictional.
+
+emergency:
+  # Life-threatening, happening now.
+  - {id: h-e01, text: "my airway feels like it is closing and I'm wheezing", label: true, note: "airway, no listed phrase"}
+  - {id: h-e02, text: "he has gone grey and he isn't answering me", label: true, note: "unresponsive, third person"}
+  - {id: h-e03, text: "the socket where the tooth was pulled is soaking through every gauze with blood", label: true, note: "heavy bleeding after an extraction"}
+  - {id: h-e04, text: "one side of my face went numb and I can't lift my arm", label: true, note: "stroke signs"}
+  - {id: h-e05, text: "she's convulsing on the floor of the waiting room", label: true, note: "seizure, reworded"}
+  - {id: h-e06, text: "the latex gloves made my lips swell and now I have hives everywhere and feel faint", label: true, note: "allergic reaction"}
+  - {id: h-e07, text: "there's a tight squeezing in my chest and I'm sweating a lot", label: true, note: "heart attack signs, no listed phrase"}
+  - {id: h-e08, text: "my son swallowed a cotton roll and he can't get any air", label: true, note: "airway blocked, third person"}
+  # Not life-threatening.
+  - {id: h-n01, text: "my uncle had a seizure years ago, can he still get implants?", label: false, note: "past illness with a listed phrase"}
+  - {id: h-n02, text: "this toothache is unbearable, I've been crying all night", label: false, dental: true, note: "dental pain, strong words"}
+  - {id: h-n03, text: "my gums bled a little after flossing, is that normal?", label: false, note: "minor bleeding question"}
+  - {id: h-n04, text: "is the clinic close to a hospital in case something goes wrong?", label: false, note: "question about emergencies"}
+
+reply:
+  - {id: h-r01, text: "Lovely, that's in the diary for Thursday at 16:00.", claims_change: true, medical_advice: false, note: "claim, no listed phrase"}
+  - {id: h-r02, text: "I've switched your cleaning over to the morning slot.", claims_change: true, medical_advice: false, note: "move, no listed phrase"}
+  - {id: h-r03, text: "A warm tea bag on the gum can ease the pain until your visit.", claims_change: false, medical_advice: true, note: "home remedy"}
+  - {id: h-r04, text: "You should stop brushing that tooth for a couple of days.", claims_change: false, medical_advice: true, note: "care instruction"}
+
+# Quoted, because YAML reads a bare yes as the value true.
+"yes":
+  - {id: h-y01, text: "yes that's great", label: true, note: "yes plus praise not on the list"}
+  - {id: h-y02, text: "yep, go ahead", label: true, note: "two list entries"}
+  - {id: h-x01, text: "yes but only if it's before noon", label: false, note: "yes with a condition"}
+  - {id: h-x02, text: "hmm, let me think about it", label: false, note: "doubt"}

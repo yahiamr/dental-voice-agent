@@ -1,0 +1,5 @@
+# Test conversations. Stage 3, extended in Stages 4 and 5.
+# Each entry has name, stage, caller_phone, optional setup, lines, auto_yes and expect
+# (actions, outcome, said, not_said, tools).
+# Covers booking with a correction and a question, out of scope, injection, urgent, medical
+# question, reschedule, cancel, cancel within notice, and a parking question.

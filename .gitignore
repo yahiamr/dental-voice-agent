@@ -1,0 +1,37 @@
+# What Git must never track. Real content, not a placeholder: keys and generated data
+# stay out from the first commit. tests/fixtures/speech/ stays in Git.
+
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Generated data
+runs/
+data/*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
+# Design notes and the file log stay on this machine. The leading slash keeps data/docs/,
+# the clinic documents the agent reads, in Git.
+/docs/
+
+# Editors and the operating system
+.DS_Store
+.vscode/
+.idea/
+.claude/
+
+# Build output
+dist/
+build/
+*.egg-info/

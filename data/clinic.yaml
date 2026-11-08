@@ -1,0 +1,101 @@
+# The source of truth for clinic facts. To change a price, a rule or a fixed sentence, edit
+# this file and no code. clinic/data.py loads it into a typed Clinic object at startup, and a
+# bad file stops the program there, naming the field.
+# All phone numbers are placeholders, so nobody should dial them.
+
+name: Mirador Dental
+clinic_line: "910 000 001"
+urgent_line: "910 000 002"
+timezone: Europe/Madrid
+
+# Closed days come from the holidays library: Spain, Community of Madrid.
+holidays: {country: ES, subdivision: MD}
+
+# "Morning" and "afternoon" in a caller's request mean these hours.
+hours:
+  morning: ["09:00", "13:00"]
+  afternoon: ["15:00", "19:00"]
+open_days: [mon, tue, wed, thu, fri]
+slot_minutes: 30
+
+# How close and how far ahead a booking can be.
+booking_window: {min_hours_ahead: 2, max_days_ahead: 60}
+
+# Changes inside this many hours of an appointment are refused, unless this call booked it.
+notice_hours: 24
+
+services:
+  - {id: first_visit, name: first-visit consultation, price_eur: 30, first_visit: true}
+  - {id: check_up, name: check-up, price_eur: 40}
+  - {id: cleaning, name: cleaning, price_eur: 60}
+  - {id: filling, name: filling, price_eur: 80}
+  - {id: whitening, name: whitening, price_eur: 150}
+
+# Fixed lines are spoken exactly as written. {clinic_line}, {urgent_line} and {notice_hours}
+# are filled in by Clinic.line.
+lines:
+  greeting: "Hello, this is the automated assistant for Mirador Dental. Calls are stored. How can I help?"
+  still_there: "Are you still there?"
+  not_caught: "Sorry, I didn't catch that."
+  trouble: "Sorry, I'm having trouble."
+  commit_unknown: "I couldn't confirm that. Please call the clinic on {clinic_line} to check."
+  cannot_finish: "I'm sorry, I can't finish this here."
+  call_clinic: "Please call the clinic on {clinic_line}."
+  medical: "I can't give medical advice. Please ask the dentist at your visit."
+  emergency: "If this is an emergency, call 112."
+  urgent_message: "This sounds like an emergency. Please call 112 now. Our urgent line is {urgent_line}."
+  no_search: "I don't have that information here. Please call the clinic on {clinic_line}."
+  unsupported: "I can't do that on this line yet. Please call the clinic on {clinic_line}."
+
+# Spoken when commit refuses an action, keyed by ErrorCode.
+refusal_lines:
+  slot_taken: "That time has just been taken. Would you like other times?"
+  slot_not_offered: "That time is no longer on offer. Would you like other times?"
+  not_owner: "I can't find that appointment on this number. That change was not made."
+  policy_blocked: "That appointment is within our {notice_hours}-hour notice period, so I can't change it here. Please call the clinic on {clinic_line}."
+  first_visit_required: "New patients start with a first-visit consultation. Would you like one of those?"
+  first_visit_booked: "You already have a first-visit consultation booked, so I can't book another one. That change was not made."
+  existing_patient: "You're already a patient with us, so you don't need a first-visit consultation. Would you like a check-up instead?"
+  missing_field: "I still need a few details. That change was not made."
+
+# Phrases that end the call with the 112 message. See guards/urgent.py.
+urgent_phrases:
+  - can't breathe
+  - cannot breathe
+  - can not breathe
+  - not breathing
+  - trouble breathing
+  - difficulty breathing
+  - struggling to breathe
+  - short of breath
+  - throat is swelling
+  - throat swelling
+  - throat is closing
+  - throat closing
+  - swelling in my throat
+  - tongue is swelling
+  - bleeding won't stop
+  - bleeding will not stop
+  - won't stop bleeding
+  - unconscious
+  - passed out
+  - heart attack
+  - chest pain
+  - choking
+  - seizure
+  - stroke
+  - anaphylaxis
+
+# A phrase is ignored only when one of these words comes directly before it. "no" is quoted
+# because plain YAML can read it as false.
+negation_tokens: ["no", "not", "without", "never"]
+
+# Phrases that claim a change happened. See guards/reply_check.py. The last five book phrases
+# were added with the checker design, from golden-set claims the list missed.
+claim_phrases:
+  book: ["you're booked", "you are booked", "you're all set", "all set", "that's booked", "i've booked", "i have booked", "is confirmed", "is scheduled", "that's sorted", "i've put you down for", "i have put you down for", "we've put you down for"]
+  move: ["i've moved", "i have moved", "has been moved", "is now on"]
+  cancel: ["i've cancelled", "i have cancelled", "has been cancelled", "is cancelled"]
+
+# A reply with any of these words is replaced by the medical line.
+dosing_words: [ibuprofen, paracetamol, aspirin, antibiotic, amoxicillin, painkiller, mg, milligrams, dose, dosage]

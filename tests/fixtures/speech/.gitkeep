@@ -1,0 +1,3 @@
+# Keeps this folder in Git until Stage 2.
+# Will hold about 20 WAV and JSON pairs saved with `dental-agent voice --save-fixtures <dir>`.
+# Each JSON has Deepgram's text, confidence and an expected result.

@@ -1,0 +1,57 @@
+# Project and build configuration, read by uv, pytest and ruff.
+# `uv sync` installs text mode. Each extra below adds one optional feature, so a reader who
+# only wants the code and the tests needs no audio libraries.
+
+[project]
+name = "dental-voice-agent"
+version = "0.1.0"
+description = "A voice agent that books, moves and cancels appointments for a fictional dental clinic."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "langgraph>=1.2",          # The turn graph and the checkpointer.
+    "langchain>=1.4",          # init_chat_model and init_embeddings, for provider choice.
+    "langchain-anthropic>=1.7", # The default model provider.
+    "anthropic>=2.6",           # The Haiku checker calls the SDK directly.
+    "pydantic>=2.7",           # Typed state, tool inputs and records.
+    "pydantic-settings",       # Loads settings from the environment and .env.
+    "pyyaml",                  # Reads data/clinic.yaml.
+    "holidays",                # Public holidays, for closed days.
+]
+
+[project.optional-dependencies]
+voice-deepgram = ["deepgram-sdk>=7", "sounddevice", "numpy"]
+voice-local = ["parakeet-mlx", "kokoro", "silero-vad", "sounddevice", "numpy"]
+embeddings = ["langchain-huggingface", "sentence-transformers", "sqlite-vec"]
+openrouter = ["langchain-openrouter"]
+checkpoint-sqlite = ["langgraph-checkpoint-sqlite"]
+
+[project.scripts]
+# Makes `dental-agent` run main() in cli.py.
+dental-agent = "dental_agent.cli:main"
+
+[dependency-groups]
+dev = ["pytest", "pytest-cov", "ruff"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Includes every file in the package, so schema.sql and system.md ship with the code.
+packages = ["src/dental_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The project root is on the path so tests can import the evals package.
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+# Default rules plus I, which keeps imports sorted.
+extend-select = ["I"]
+# Allow `except Exception`. The session, nodes and dispatcher are failure boundaries: anything
+# that goes wrong there must become a fixed line or a typed result, never a crash mid-call.
+ignore = ["BLE001"]
