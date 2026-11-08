@@ -49,6 +49,19 @@ def test_find_slots_returns_two_earliest_slots(state, deps):
     assert "November" in outcome.result.data[0]["spoken"]
 
 
+def test_find_slots_tells_the_model_to_prepare_a_requested_time_without_asking(state, deps):
+    # Live calls asked "Would you like me to book that?" after finding the exact time the caller
+    # asked for, so the caller said yes twice. The rule sits in the result, next to the choice.
+    message = run("find_slots", state, deps, WINDOW).result.message
+    assert "prepare_booking" in message
+    assert "do not ask" in message.lower()
+    # A prepare without a saved service fails and can run out of rounds, so it says to save too.
+    assert "save_details" in message
+    # A new caller's name must be known first, or the prepare fails with missing_field.
+    assert "name" in message
+    assert "prepare_reschedule" not in message
+
+
 def test_find_slots_hides_the_database_id_from_the_model(state, deps):
     outcome = run("find_slots", state, deps, WINDOW)
     assert set(outcome.result.data[0]) == {"slot_id", "spoken"}
@@ -484,3 +497,13 @@ def test_find_slots_for_a_move_inside_the_notice_period_is_refused(deps):
     outcome = run("find_slots", ready, deps, args)
     assert outcome.result.error_code is ErrorCode.POLICY_BLOCKED
     assert "offers" not in outcome.updates
+
+
+def test_find_slots_for_a_move_points_only_to_prepare_reschedule(deps):
+    # Naming prepare_booking here could book a second appointment instead of moving the first.
+    ready = looked_up(known_caller(), deps)
+    args = WINDOW | {"service": "check_up", "appointment_id": "a1"}
+    message = run("find_slots", ready, deps, args).result.message
+    assert "prepare_reschedule" in message
+    assert "prepare_booking" not in message
+    assert "save_details" not in message

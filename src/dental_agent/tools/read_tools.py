@@ -7,7 +7,9 @@ What it contains:
     - find_slots: up to 2 earliest free slots. A new search replaces earlier offers. It refuses
       a service this caller cannot book, so such a time is never offered. With appointment_id,
       it searches new times for that found appointment's own service, so a new patient can move
-      their first visit, and refuses an appointment inside the notice period.
+      their first visit, and refuses an appointment inside the notice period. Its result tells
+      the model to prepare a time the caller already asked for, without asking first: with
+      prepare_booking for a booking search, and prepare_reschedule for a move search.
     - lookup_appointment: this caller's active appointments still to come, up to 5.
     - get_clinic_facts: services, prices, hours or rules from clinic.yaml.
     - search_clinic_info: searches the clinic documents, from Stage 5.
@@ -41,6 +43,26 @@ from dental_agent.tools.schemas import (
 
 MAX_OFFERS = 2  # Two choices are easy to follow by ear.
 MAX_APPOINTMENTS = 5  # A limit, so a spoken list stays short.
+
+# Sent with every search result, because the model decides here. With the rule only in the
+# system prompt, live calls still asked "Would you like me to book that?" after finding the exact
+# time the caller asked for, so the caller had to say yes twice. A prepare with no saved service
+# or no name fails and can use up the tool rounds, so the booking message names both. A search
+# for a move gets its own message, which never names prepare_booking, so the model cannot book a
+# second appointment instead of moving the first.
+BOOK_FOUND_MESSAGE = (
+    "If the caller already asked for one of these exact times and their name is known, call "
+    "prepare_booking for it now, with save_details in the same response if the service is not "
+    "saved yet. Do not ask whether to book it, because the system asks. Any text you send with "
+    'it is spoken, so keep it to one short sentence such as "Yes, that time is free." '
+    "Otherwise offer these times."
+)
+MOVE_FOUND_MESSAGE = (
+    "If the caller already asked for one of these exact times, call prepare_reschedule now with "
+    "this appointment_id and that slot_id. Do not ask whether to move it, because the system "
+    'asks. Any text you send with it is spoken, so keep it to one short sentence such as "Yes, '
+    'that time is free." Otherwise offer these times.'
+)
 
 
 def find_slots(args: FindSlotsInput, state: CallState, deps: GraphDeps) -> ToolOutcome:
@@ -105,7 +127,9 @@ def find_slots(args: FindSlotsInput, state: CallState, deps: GraphDeps) -> ToolO
     # The model sees only the short ID and the words, never the database ID.
     data = [{"slot_id": offer.slot_id, "spoken": offer.spoken} for offer in offers]
     updates = {"offers": offers, "next_slot_number": number + len(offers)}
-    return ToolOutcome(result=ToolResult(ok=True, data=data), updates=updates)
+    message = BOOK_FOUND_MESSAGE if args.appointment_id is None else MOVE_FOUND_MESSAGE
+    result = ToolResult(ok=True, data=data, message=message)
+    return ToolOutcome(result=result, updates=updates)
 
 
 def with_call_ids(rows: list[Appointment], first_number: int) -> list[Appointment]:
