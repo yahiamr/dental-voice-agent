@@ -249,10 +249,12 @@ scenarios:
   - name: unanswerable_question
     stage: 5
     caller: new
-    # The handbook does not mention Botox. Search still returns its closest pieces, so the bot
-    # must say it does not know and give the clinic number, not guess.
+    # Neither the handbook nor the clinic facts mention pets. Search still returns its closest
+    # pieces, so the bot must say it does not know and give the clinic number, not guess. The
+    # first version asked about Botox, but the clinic's service list answers that (no), so the
+    # model rightly used get_clinic_facts instead of search.
     lines:
-      - "Do you do Botox?"
+      - "Can I bring my dog to my appointment?"
       - "OK, bye."
     expect:
       actions: []

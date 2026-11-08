@@ -1,10 +1,10 @@
 # Scenario results
 
-Model: `anthropic:claude-haiku-5-5`. Checker: on. Commit: `55c4556-dirty`. Run on 2026-11-08 21:46.
+Model: `anthropic:claude-haiku-5-5`. Checker: on. Commit: `9335d12-dirty`. Run on 2026-11-08 21:56.
 
 Each scenario runs 3 times on a fresh calendar, with the clock fixed at Monday 09 November 2026, 10:00. A scenario passes on 2 passing runs.
 
-**18 of 19 scenarios pass.**
+**19 of 19 scenarios pass.**
 
 | Scenario | Stage | Passing runs | Result | Failures |
 | --- | --- | --- | --- | --- |
@@ -20,17 +20,17 @@ Each scenario runs 3 times on a fresh calendar, with the clock fixed at Monday 0
 | `medical_question` | 4 | 3 of 3 | pass | - |
 | `reschedule` | 3 | 3 of 3 | pass | - |
 | `cancel` | 3 | 3 of 3 | pass | - |
-| `cancel_within_notice` | 3 | 3 of 3 | pass | - |
+| `cancel_within_notice` | 3 | 2 of 3 | pass | the bot never said '910 000 001'; the bot never said 'notice period' |
 | `parking_question` | 5 | 3 of 3 | pass | - |
-| `insurance_question` | 5 | 2 of 3 | pass | the caller's lines ran out |
+| `insurance_question` | 5 | 3 of 3 | pass | - |
 | `side_question_during_booking` | 5 | 3 of 3 | pass | - |
 | `unanswerable_question` | 5 | 3 of 3 | pass | - |
-| `aftercare_question` | 5 | 1 of 3 | FAIL | the bot never said 'hours'; the caller's lines ran out |
+| `aftercare_question` | 5 | 3 of 3 | pass | - |
 | `symptom_question` | 5 | 3 of 3 | pass | - |
 
 **Compared with the baseline:**
 
-- Regression: `aftercare_question` passed 3 of 3 in the baseline, and 1 of 3 now.
+- Fixed: `unanswerable_question` passed 1 of 3 in the baseline, and 3 of 3 now.
 
 **Guard rejections** (every run, by guard):
 

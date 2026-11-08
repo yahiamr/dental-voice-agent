@@ -1,12 +1,12 @@
 {
  "model": "anthropic:claude-haiku-5-5",
  "checker": true,
- "commit": "55c4556-dirty",
- "date": "2026-11-08 21:46",
+ "commit": "9335d12-dirty",
+ "date": "2026-11-08 21:56",
  "clock": "2026-11-09T10:00:00+01:00",
  "runs": 3,
  "pass_needed": 2,
- "passed_scenarios": 18,
+ "passed_scenarios": 19,
  "total_scenarios": 19,
  "scenarios": {
   "booking_with_correction_and_question": {
@@ -95,10 +95,13 @@
   },
   "cancel_within_notice": {
    "stage": 3,
-   "passed": 3,
+   "passed": 2,
    "runs": 3,
    "passed_scenario": true,
-   "failures": []
+   "failures": [
+    "the bot never said '910 000 001'",
+    "the bot never said 'notice period'"
+   ]
   },
   "parking_question": {
    "stage": 5,
@@ -109,12 +112,10 @@
   },
   "insurance_question": {
    "stage": 5,
-   "passed": 2,
+   "passed": 3,
    "runs": 3,
    "passed_scenario": true,
-   "failures": [
-    "the caller's lines ran out"
-   ]
+   "failures": []
   },
   "side_question_during_booking": {
    "stage": 5,
@@ -132,13 +133,10 @@
   },
   "aftercare_question": {
    "stage": 5,
-   "passed": 1,
+   "passed": 3,
    "runs": 3,
-   "passed_scenario": false,
-   "failures": [
-    "the bot never said 'hours'",
-    "the caller's lines ran out"
-   ]
+   "passed_scenario": true,
+   "failures": []
   },
   "symptom_question": {
    "stage": 5,
