@@ -229,6 +229,11 @@ Two layers do the work:
 Voice and text use the same graph: the session swaps a keyboard for a microphone and speaker,
 and the graph never sees audio.
 
+Every call is traced. The session writes one line per turn to `runs/traces/`, holding each model
+call with its token counts, each tool call, every guard decision, the checker's scores and
+fallbacks, speech timings and the filler line. The trace is what explains a failed scenario run,
+and what the voice timings are measured from.
+
 ![System architecture: caller, interface, session, turn graph over the guards, services, data and saved files](assets/diagrams/architecture.svg)
 
 *Read it top to bottom, one layer per row. Green is decided by code, purple is the main model,
@@ -603,6 +608,22 @@ so they show the scale, not a benchmark.
   - more runs per scenario, with the scenarios run in CI;
   - a test set of real recorded turns.
 
+### Observability
+
+The trace records each call in detail, but nothing yet looks across calls.
+
+- **Standard tracing.** A span for each turn and each graph step, with OpenTelemetry or
+  LangSmith, so one slow or failed turn can be followed through every step.
+- **Metrics from the trace events:** delay per turn type (p50 and p95), outcome rates, how often
+  a fixed line replaces the model, how often each guard steps in, how often the checker falls
+  back from Jev to Haiku, and tokens and cost per call.
+- **Alerts** on the signals that mean something broke: a jump in fixed lines or failed commits,
+  Jev timing out, or the emergency rate moving away from its usual level.
+- **Quality next to the numbers.** The LLM judge's scores on the same dashboards, so a drop in
+  quality shows up beside the change that caused it.
+- **Masked before it leaves.** The trace holds the caller's words, so they are masked before
+  anything is sent to a log store.
+
 ### Async and scale
 
 - **Async from end to end.** Today one call runs in one process, with blocking calls and threads
@@ -615,9 +636,8 @@ so they show the scale, not a benchmark.
 - **A phone line and many clinics.** A telephony provider streams each call to a worker and
   brings real caller ID. A clinic ID on every row, with its own facts file and handbook index,
   serves many clinics from one deployment.
-- **Limits and visibility.** Per-provider concurrency limits and a fallback model through the
-  existing factory, and traces sent to a log store with dashboards for latency, guard
-  rejections and cost per call.
+- **Provider limits.** Per-provider concurrency limits, and a fallback model through the
+  existing factory.
 
 ## Project layout
 
