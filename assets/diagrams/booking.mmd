@@ -1,0 +1,23 @@
+%% The two-step booking: the model prepares, the code writes only after the caller's yes.
+%% Rendered into booking.svg.
+sequenceDiagram
+    autonumber
+    actor C as Caller
+    participant M as Main model
+    participant T as Tools and guards (code)
+    participant K as Calendar (SQLite)
+
+    C->>M: "Cleaning on Tuesday the 17th at 10, please"
+    M->>T: find_slots(cleaning, Tuesday 17 November, 10:00)
+    T->>K: read free times
+    K-->>T: 10:00 is free
+    T-->>M: slot found, prepare it
+    M->>T: prepare_booking(slot, name)
+    Note over T: validate_action checks the rules,<br/>then stores the change as pending
+    T->>C: "Just to confirm: a cleaning for Lucía Moreno<br/>on Tuesday 17 November at 10:00. Shall I book that?"
+    Note over T: Built from the stored change,<br/>not from the model's words
+    C->>T: "yes"
+    Note over T: Yes rule passes, no emergency.<br/>No model call this turn
+    T->>K: validate again, then write
+    K-->>T: written (or slot taken → refusal line)
+    T->>C: "You're booked for a cleaning on ..." (template)

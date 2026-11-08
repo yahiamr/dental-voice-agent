@@ -1,0 +1,26 @@
+%% Handbook search: built once, then used by the search_clinic_info tool.
+%% Rendered into search.svg.
+flowchart TD
+    subgraph build["Index time · rebuilt when the handbook or the model changes"]
+        direction LR
+        doc["patient-handbook.md<br/>~3,000 words"] --> split["50 pieces<br/>one per subsection<br/>+ heading path"]
+        split --> fts[("Keyword index<br/>SQLite FTS5 · BM25")]
+        split --> emb["FastEmbed<br/>bge-small-en-v1.5"] --> vec[("Vector index<br/>sqlite-vec · cosine")]
+    end
+
+    subgraph query["Question time · the search_clinic_info tool"]
+        direction LR
+        q(["Model's<br/>search words"]) --> kw["Keyword search<br/>top 5"]
+        q --> vs["Meaning search<br/>top 5"]
+        kw --> rrf["Merge by rank<br/>reciprocal rank fusion"]
+        vs --> rrf
+        rrf --> top["Top 3 pieces<br/>+ answer only from these"]
+        top --> ans(["Model answers<br/>reply check accepts text<br/>that repeats the pieces"])
+    end
+
+    build -- "both indexes in one SQLite file" --> query
+
+    classDef store fill:#eaf6ee,stroke:#3f8a5a,color:#173d25
+    classDef ext fill:#f6f0ff,stroke:#7c5cbf,color:#2d1f4f
+    class fts,vec store
+    class emb ext

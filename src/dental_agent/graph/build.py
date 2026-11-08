@@ -6,12 +6,12 @@ What this file is:
 What it contains:
     - build_graph(deps: GraphDeps), which adds nodes and edges and compiles with the
       checkpointer.
-    - The Mermaid diagram export for the README.
+    - graph_diagram: LangGraph's own Mermaid export, for checking the wiring.
 
 How to understand it:
     Read this for the shape of a turn in one place. No node has a retry policy, so a commit can
-    never run twice by accident. The README diagram comes from this code, so it cannot drift
-    from what actually runs.
+    never run twice by accident. The README diagrams are drawn by hand in assets/diagrams/, so
+    after changing the wiring, compare graph_diagram's output with turn.mmd.
 
 Uses:
     graph/nodes.py, graph/routing.py, state.py, deps.py
@@ -91,5 +91,5 @@ def build_graph(deps: GraphDeps) -> Any:
 
 
 def graph_diagram(deps: GraphDeps) -> str:
-    """Return the Mermaid diagram for the README, drawn from the real graph."""
+    """Return LangGraph's Mermaid diagram of the real graph, to check turn.mmd against."""
     return build_graph(deps).get_graph().draw_mermaid()

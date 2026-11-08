@@ -1,0 +1,60 @@
+---
+config:
+  layout: elk
+---
+%% One caller turn through the agent graph, drawn by hand from graph/routing.py.
+%% The small grey names are the real graph steps. Every red "Fixed line" box is the same step,
+%% use_fixed_line, drawn more than once so the lines do not cross. Rendered into turn.svg.
+flowchart TD
+    words(["Caller's words"])
+
+    subgraph before["1 · Before the model: code only"]
+        phrase["Urgent phrase?<br/><small>check_emergency</small>"]
+        yes["Change waiting and a clear yes?<br/><small>check_confirmation</small>"]
+    end
+
+    subgraph modelstage["2 · Model and tools: up to 3 rounds"]
+        model["Main model replies or asks for tools<br/><small>call_model</small>"]
+        wait["Emergency check answered?<br/><small>await_emergency</small>"]
+        tools["Run the tools<br/><small>run_tools</small>"]
+        ask["Read back the stored change, with the name<br/><small>ask_confirmation</small>"]
+    end
+
+    subgraph after["3 · After the model"]
+        check["Reply check: false claim of a change? medical advice?<br/><small>check_model_reply</small>"]
+    end
+
+    commit["Validate again, write, say the result from a template<br/><small>write_to_calendar</small>"]
+
+    f1["Fixed line: 112"]
+    f2["Fixed line: 112"]
+    f3["Fixed line: refusal"]
+    f4["Fixed line: urgent · limit"]
+    f5["Fixed line: safe reply"]
+    spoken(["Spoken to the caller<br/><small>end_turn</small>"])
+
+    words --> phrase
+    phrase -- match --> f1
+    phrase -- none --> yes
+    yes -- "yes: skip the model" --> commit
+    yes -- "anything else: drop the change" --> model
+    model --> wait
+    wait -- emergency --> f2
+    wait -- "tool calls" --> tools
+    wait -- "reply" --> check
+    tools -- "more to do" --> model
+    tools -- "prepare_* passed the rules" --> ask
+    tools -- "flag_urgent · round limit" --> f4
+    commit -- "slot taken · not allowed" --> f3
+    commit -- written --> spoken
+    ask --> spoken
+    tools -- end_call --> spoken
+    check -- "passes, or repeats the handbook" --> spoken
+    check -- fails --> f5
+
+    classDef decision fill:#fff8e1,stroke:#b48a1c,color:#4a3a08
+    classDef stop fill:#fdecea,stroke:#c0392b,color:#5c1a12
+    classDef good fill:#eaf6ee,stroke:#3f8a5a,color:#173d25
+    class phrase,yes,wait,check decision
+    class f1,f2,f3,f4,f5 stop
+    class commit,spoken good

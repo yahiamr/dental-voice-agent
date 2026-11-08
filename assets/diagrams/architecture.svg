@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 904" width="960" height="904" role="img" aria-labelledby="title desc">
+  <title id="title">Mirador Dental voice agent: system architecture</title>
+  <desc id="desc">Layers from top to bottom: the caller; the command line and Deepgram speech; the session, one per call; the turn graph with checks first, the model loop and the answer steps, over the guards in code; the services: main model, checker chain, tools and search; the data: checkpointer, calendar, clinic facts and the handbook index; and the files saved per call.</desc>
+  <!-- Drawn by hand, not rendered. Edit this file directly; scripts/render_diagrams.sh does not touch it. -->
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#5b6b7f" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: Helvetica, Arial, sans-serif; }
+      .h { font-size: 15px; font-weight: 700; }
+      .s { font-size: 12.5px; }
+      .m { font-family: Menlo, Consolas, monospace; font-size: 12px; }
+      .lbl { font-size: 11.5px; fill: #5b6b7f; }
+      .arr { stroke: #5b6b7f; stroke-width: 1.3; fill: none; }
+      .neutral rect, rect.neutral { fill: #eef2f7; stroke: #5b6b7f; }
+      .neutral text { fill: #1f2933; }
+      .code rect { fill: #e6f4ee; stroke: #2f7d5b; }
+      .code text { fill: #14432f; }
+      .model rect { fill: #efebfb; stroke: #5b4bb7; }
+      .model text { fill: #2e2470; }
+      .ext rect { fill: #e8f1fb; stroke: #2f6db5; }
+      .ext text { fill: #173a66; }
+      .data rect { fill: #f3f1ea; stroke: #6b675c; }
+      .data text { fill: #34312a; }
+      .out rect { fill: #fff6dd; stroke: #b08a1e; }
+      .out text { fill: #4a3a08; }
+      .safe rect { fill: #fcebea; stroke: #b83a30; }
+      .safe text { fill: #5c1a12; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="904" fill="#ffffff"/>
+
+  <!-- Caller -->
+  <g class="neutral">
+    <rect x="380" y="16" width="200" height="50" rx="25" stroke-width="1"/>
+    <text class="h" x="480" y="37" text-anchor="middle">Caller</text>
+    <text class="s" x="480" y="55" text-anchor="middle">voice or keyboard</text>
+  </g>
+  <line class="arr" x1="480" y1="66" x2="480" y2="94" marker-end="url(#arrow)"/>
+
+  <!-- Interface layer -->
+  <g class="neutral">
+    <rect x="30" y="96" width="290" height="74" rx="8" stroke-width="1"/>
+    <text class="h" x="175" y="120" text-anchor="middle">Command line · cli.py</text>
+    <text class="m" x="175" y="141" text-anchor="middle">dental-agent chat</text>
+    <text class="m" x="175" y="158" text-anchor="middle">dental-agent voice</text>
+  </g>
+  <g class="ext">
+    <rect x="335" y="96" width="290" height="74" rx="8" stroke-width="1"/>
+    <text class="h" x="480" y="120" text-anchor="middle">Listening · Deepgram nova-3</text>
+    <text class="s" x="480" y="141" text-anchor="middle">speech to text as the caller talks</text>
+    <text class="s" x="480" y="158" text-anchor="middle">turn ends after 0.7 s quiet (1.3 s for a yes)</text>
+  </g>
+  <g class="ext">
+    <rect x="640" y="96" width="290" height="74" rx="8" stroke-width="1"/>
+    <text class="h" x="785" y="120" text-anchor="middle">Speaking · Deepgram aura-2</text>
+    <text class="s" x="785" y="141" text-anchor="middle">text to speech on one open stream</text>
+    <text class="s" x="785" y="158" text-anchor="middle">mic sound dropped while the bot talks</text>
+  </g>
+  <line class="arr" x1="480" y1="170" x2="480" y2="196" marker-end="url(#arrow)"/>
+
+  <!-- Session -->
+  <g class="neutral">
+    <rect x="30" y="198" width="900" height="62" rx="8" stroke-width="1"/>
+    <text class="h" x="480" y="223" text-anchor="middle">Session · session.py · one per call</text>
+    <text class="s" x="480" y="245" text-anchor="middle">greeting · turn loop · "One moment." filler while tools run · closing lines · saves the record and the trace</text>
+  </g>
+  <line class="arr" x1="480" y1="260" x2="480" y2="286" marker-end="url(#arrow)"/>
+
+  <!-- Turn graph container -->
+  <rect x="30" y="288" width="900" height="232" rx="14" fill="#fafbfc" stroke="#aab4c0" stroke-width="1" stroke-dasharray="5 4"/>
+  <text class="h" x="50" y="312" fill="#1f2933">Turn graph · graph/ · one LangGraph run per caller turn</text>
+  <text class="lbl" x="910" y="312" text-anchor="end">system prompt + Current Facts from prompts/</text>
+
+  <g class="code">
+    <rect x="50" y="326" width="274" height="132" rx="8" stroke-width="1"/>
+    <text class="h" x="187" y="348" text-anchor="middle">1 · Checks first (code)</text>
+    <text class="m" x="187" y="374" text-anchor="middle">start_turn</text>
+    <text class="m" x="187" y="393" text-anchor="middle">check_emergency</text>
+    <text class="m" x="187" y="412" text-anchor="middle">check_confirmation</text>
+    <text class="m" x="187" y="431" text-anchor="middle">await_emergency</text>
+    <text class="s" x="187" y="450" text-anchor="middle">a clear yes skips the model</text>
+  </g>
+  <g class="model">
+    <rect x="343" y="326" width="274" height="132" rx="8" stroke-width="1"/>
+    <text class="h" x="480" y="348" text-anchor="middle">2 · Model loop (up to 3 rounds)</text>
+    <text class="m" x="480" y="384" text-anchor="middle">call_model</text>
+    <text class="m" x="480" y="403" text-anchor="middle">run_tools</text>
+    <text class="s" x="480" y="440" text-anchor="middle">the model replies or asks for tools</text>
+  </g>
+  <g class="code">
+    <rect x="636" y="326" width="274" height="132" rx="8" stroke-width="1"/>
+    <text class="h" x="773" y="348" text-anchor="middle">3 · Answer (code)</text>
+    <text class="m" x="773" y="374" text-anchor="middle">ask_confirmation</text>
+    <text class="m" x="773" y="393" text-anchor="middle">write_to_calendar</text>
+    <text class="m" x="773" y="412" text-anchor="middle">check_model_reply</text>
+    <text class="m" x="773" y="431" text-anchor="middle">use_fixed_line</text>
+    <text class="m" x="773" y="450" text-anchor="middle">end_turn</text>
+  </g>
+  <line class="arr" x1="324" y1="392" x2="340" y2="392" marker-end="url(#arrow)"/>
+  <line class="arr" x1="617" y1="392" x2="633" y2="392" marker-end="url(#arrow)"/>
+
+  <g class="safe">
+    <rect x="50" y="470" width="860" height="36" rx="8" stroke-width="1"/>
+    <text class="s" x="480" y="493" text-anchor="middle"><tspan font-weight="700">Guards in code · guards/</tspan>   urgent phrases · yes rule · validate_action (offered slot, booking window, 24 h notice, ownership) · reply check</text>
+  </g>
+
+  <!-- Graph to services -->
+  <line class="arr" x1="135" y1="520" x2="135" y2="546" marker-end="url(#arrow)"/>
+  <line class="arr" x1="365" y1="520" x2="365" y2="546" marker-end="url(#arrow)"/>
+  <line class="arr" x1="595" y1="520" x2="595" y2="546" marker-end="url(#arrow)"/>
+  <line class="arr" x1="825" y1="520" x2="825" y2="546" marker-end="url(#arrow)"/>
+
+  <!-- Services -->
+  <g class="model">
+    <rect x="30" y="548" width="210" height="90" rx="8" stroke-width="1"/>
+    <text class="h" x="135" y="571" text-anchor="middle">Main model</text>
+    <text class="s" x="135" y="592" text-anchor="middle">Claude Haiku · Anthropic</text>
+    <text class="s" x="135" y="610" text-anchor="middle">talks, picks tools</text>
+    <text class="s" x="135" y="625" text-anchor="middle">never writes the calendar</text>
+  </g>
+  <g class="ext">
+    <rect x="260" y="548" width="210" height="90" rx="8" stroke-width="1"/>
+    <text class="h" x="365" y="571" text-anchor="middle">Checker · checker/</text>
+    <text class="s" x="365" y="592" text-anchor="middle">Jev (OpenRouter), then Haiku</text>
+    <text class="s" x="365" y="610" text-anchor="middle">yes-or-no: emergency,</text>
+    <text class="s" x="365" y="625" text-anchor="middle">claimed change, medical advice</text>
+  </g>
+  <g class="code">
+    <rect x="490" y="548" width="210" height="90" rx="8" stroke-width="1"/>
+    <text class="h" x="595" y="571" text-anchor="middle">Tools · tools/</text>
+    <text class="s" x="595" y="592" text-anchor="middle">find times · look up · facts</text>
+    <text class="s" x="595" y="610" text-anchor="middle">search · save details</text>
+    <text class="s" x="595" y="625" text-anchor="middle">prepare · flag urgent · end</text>
+  </g>
+  <g class="code">
+    <rect x="720" y="548" width="210" height="90" rx="8" stroke-width="1"/>
+    <text class="h" x="825" y="571" text-anchor="middle">Search · clinic/</text>
+    <text class="s" x="825" y="592" text-anchor="middle">keyword (BM25) + meaning</text>
+    <text class="s" x="825" y="610" text-anchor="middle">FastEmbed bge-small</text>
+    <text class="s" x="825" y="625" text-anchor="middle">merged by rank, top 3</text>
+  </g>
+
+  <!-- Services to data -->
+  <!-- The calendar write comes from the graph's answer steps, not from a tool -->
+  <path class="arr" d="M480 520 L480 652 L330 652 L330 694" marker-end="url(#arrow)" style="stroke:#2f7d5b;stroke-width:2"/>
+  <text class="lbl" x="405" y="666" text-anchor="middle" style="fill:#14432f;font-weight:700">writes only after a yes</text>
+  <path class="arr" d="M560 638 L560 678 L400 678 L400 694" marker-end="url(#arrow)"/>
+  <text class="lbl" x="566" y="664">read</text>
+  <line class="arr" x1="630" y1="638" x2="630" y2="694" marker-end="url(#arrow)"/>
+  <line class="arr" x1="825" y1="638" x2="825" y2="694" marker-end="url(#arrow)"/>
+  <!-- Checkpointer keeps the graph's state: drawn on the left margin -->
+  <path class="arr" d="M30 404 L14 404 L14 732 L28 732" marker-start="url(#arrow)" marker-end="url(#arrow)" stroke-dasharray="4 3"/>
+
+  <!-- Data -->
+  <g class="data">
+    <rect x="30" y="696" width="210" height="72" rx="8" stroke-width="1"/>
+    <text class="h" x="135" y="719" text-anchor="middle">Checkpointer</text>
+    <text class="s" x="135" y="739" text-anchor="middle">call state between turns</text>
+    <text class="s" x="135" y="756" text-anchor="middle">memory or SQLite</text>
+  </g>
+  <g class="data">
+    <rect x="260" y="696" width="210" height="72" rx="8" stroke-width="1"/>
+    <text class="h" x="365" y="719" text-anchor="middle">Calendar · booking/</text>
+    <text class="s" x="365" y="739" text-anchor="middle">SQLite appointments</text>
+    <text class="s" x="365" y="756" text-anchor="middle">booked · moved · cancelled</text>
+  </g>
+  <g class="data">
+    <rect x="490" y="696" width="210" height="72" rx="8" stroke-width="1"/>
+    <text class="h" x="595" y="719" text-anchor="middle">Clinic facts</text>
+    <text class="m" x="595" y="739" text-anchor="middle">data/clinic.yaml</text>
+    <text class="s" x="595" y="756" text-anchor="middle">prices · hours · rules</text>
+  </g>
+  <g class="data">
+    <rect x="720" y="696" width="210" height="72" rx="8" stroke-width="1"/>
+    <text class="h" x="825" y="719" text-anchor="middle">Patient handbook</text>
+    <text class="s" x="825" y="739" text-anchor="middle">50 pieces, indexed in</text>
+    <text class="m" x="825" y="756" text-anchor="middle">data/rag.sqlite</text>
+  </g>
+
+  <!-- Session writes runs/: drawn on the right margin -->
+  <path class="arr" d="M930 229 L946 229 L946 815 L932 815" marker-end="url(#arrow)"/>
+
+  <!-- Saved per call -->
+  <g class="out">
+    <rect x="30" y="788" width="900" height="54" rx="8" stroke-width="1"/>
+    <text class="h" x="480" y="810" text-anchor="middle">Saved per call · runs/ (ignored by Git)</text>
+    <text class="s" x="480" y="830" text-anchor="middle">conversations/*.json: transcript, actions, key points, summary  ·  traces/*.jsonl: tools, guard decisions, checker scores, timings</text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(30 866)">
+    <g class="code"><rect x="0" y="0" width="14" height="14" rx="3"/></g>
+    <text class="s" x="20" y="11" fill="#1f2933">Code decides</text>
+    <g class="model"><rect x="122" y="0" width="14" height="14" rx="3"/></g>
+    <text class="s" x="142" y="11" fill="#1f2933">Main model</text>
+    <g class="ext"><rect x="232" y="0" width="14" height="14" rx="3"/></g>
+    <text class="s" x="252" y="11" fill="#1f2933">Outside service</text>
+    <g class="safe"><rect x="364" y="0" width="14" height="14" rx="3"/></g>
+    <text class="s" x="384" y="11" fill="#1f2933">Safety rules</text>
+    <g class="data"><rect x="476" y="0" width="14" height="14" rx="3"/></g>
+    <text class="s" x="496" y="11" fill="#1f2933">Stored data</text>
+    <g class="out"><rect x="584" y="0" width="14" height="14" rx="3"/></g>
+    <text class="s" x="604" y="11" fill="#1f2933">Saved output</text>
+    <g class="neutral"><rect x="704" y="0" width="14" height="14" rx="3"/></g>
+    <text class="s" x="724" y="11" fill="#1f2933">Call handling</text>
+  </g>
+</svg>

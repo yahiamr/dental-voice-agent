@@ -6,6 +6,7 @@
 name = "dental-voice-agent"
 version = "0.1.0"
 description = "A voice agent that books, moves and cancels appointments for a fictional dental clinic."
+readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "langgraph>=1.2",          # The turn graph and the checkpointer.
