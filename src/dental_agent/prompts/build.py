@@ -14,6 +14,10 @@ How to understand it:
     the calendar, so it is the trusted record. Putting it in the system message means code-built
     facts never look like caller words.
 
+    After a booking the caller's appointments are reloaded, so the new one is listed under
+    Found appointments as well as under actions. It is marked "booked in this call", because a
+    real voice call showed the model reading the two lines as a double booking.
+
 Uses:
     state.py, models.py, clock.py
 
@@ -36,6 +40,11 @@ SYSTEM_PROMPT = Path(__file__).with_name("system.md").read_text()
 
 # How many days of dates the model sees, so it can turn "next Friday" into a date.
 DATE_LIST_DAYS = 14
+
+
+# How a found appointment changed in this call is marked, so it is not read as a second one.
+CHANGE_MARKS = {"book": "booked in this call", "move": "moved in this call",
+                "cancel": "cancelled in this call"}  # fmt: skip
 
 
 def state_block(state: CallState, actions: list[ActionRecord], clock: Clock, clinic: Clinic) -> str:
@@ -75,9 +84,13 @@ def state_block(state: CallState, actions: list[ActionRecord], clock: Clock, cli
         lines.append("Current offers: none")
 
     if state.found_appointments:
+        # A change made in this call is marked, because after a booking the caller's
+        # appointments are reloaded and the new one would otherwise look like an old one.
+        changed = {action.appointment_id: CHANGE_MARKS[action.kind] for action in actions}
         lines.append("Found appointments:")
         lines += [
             f"- {item.appointment_id}: {item.service} for {item.patient_name} on {item.spoken}"
+            + (f" ({changed[item.db_id]})" if item.db_id in changed else "")
             for item in state.found_appointments
         ]
     else:

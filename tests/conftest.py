@@ -9,6 +9,8 @@ What it contains:
     - clinic.yaml as sample data.
     - build_test_deps(model=None, speech=None, calendar=None, clock=None), which fills unset
       values with fakes.
+    - add_past_first_visit(calendar) and PAST_NEW: a new patient whose first visit was a week
+      ago, because the seed has no past appointments.
 
 How to understand it:
     Pytest loads this file automatically. Read build_test_deps first, because most integration
@@ -18,7 +20,7 @@ Used by:
     pytest
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -100,3 +102,25 @@ def deps(tmp_path, clinic, clock, calendar) -> Deps:
 def state() -> CallState:
     """A new caller at the start of a call."""
     return CallState(conversation_id="c-test", caller_phone="+34600999999")
+
+
+PAST_NEW = "+34600999001"  # Made by add_past_first_visit, never by the seed.
+
+
+def add_past_first_visit(calendar, phone=PAST_NEW, days_ago=7):
+    """Add a new patient whose first visit was days_ago. The seed has no past appointments."""
+    start = TEST_NOW - timedelta(days=days_ago)
+    with calendar._connect() as connection:
+        patient = connection.execute(
+            "INSERT INTO patients (phone, name, status, created_at) VALUES (?, ?, 'new', 'now')",
+            (phone, "Teo Lara"),
+        ).lastrowid
+        slot = connection.execute(
+            "INSERT INTO slots (start_at, end_at) VALUES (?, ?)",
+            (start.isoformat(), (start + timedelta(minutes=30)).isoformat()),
+        ).lastrowid
+        connection.execute(
+            "INSERT INTO appointments (patient_id, slot_id, service, status, created_at) "
+            "VALUES (?, ?, 'first_visit', 'active', 'now')",
+            (patient, slot),
+        )

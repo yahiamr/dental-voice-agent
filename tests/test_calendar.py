@@ -18,7 +18,7 @@ Used by:
 from datetime import date, timedelta
 
 import pytest
-from tests.conftest import TEST_NOW
+from tests.conftest import PAST_NEW, TEST_NOW, add_past_first_visit
 
 from dental_agent.booking.calendar import Calendar, SlotTaken
 from dental_agent.booking.seed import seed
@@ -174,10 +174,6 @@ def test_seed_creates_eight_sample_patients(calendar):
     assert len(calendar.sample_patients(10)) == 8
 
 
-def test_seed_takes_about_forty_percent_of_slots(calendar):
-    assert 0.35 <= calendar.taken_share() <= 0.45
-
-
 def test_seed_skips_weekends_and_holidays(calendar):
     # 25 December 2026 is a Friday and a national holiday.
     day = date(2026, 12, 25)
@@ -246,7 +242,7 @@ def test_reset_rebuilds_the_tables_from_the_schema(tmp_path, clock, clinic):
 
 
 NORA = "+34600000007"  # New, with a first visit booked ahead.
-RAUL = "+34600000008"  # New, with a first visit whose time has passed.
+RAUL = "+34600000008"  # Existing, with one appointment ahead.
 
 
 def set_status(calendar, phone, status):
@@ -262,8 +258,30 @@ def set_status(calendar, phone, status):
 def test_sample_patients_start_existing_or_new(calendar):
     assert calendar.patient_status(KNOWN_PHONE) == "existing"
     assert calendar.patient_status(NORA) == "new"
-    assert calendar.patient_status(RAUL) == "new"
+    assert calendar.patient_status(RAUL) == "existing"
     assert calendar.patient_status(NEW_PHONE) is None
+
+
+def all_appointments(calendar):
+    """Return (phone, start) for every appointment in the calendar."""
+    with calendar._connect() as connection:
+        return connection.execute(
+            "SELECT patients.phone, slots.start_at FROM appointments "
+            "JOIN patients ON patients.id = appointments.patient_id "
+            "JOIN slots ON slots.id = appointments.slot_id"
+        ).fetchall()
+
+
+def test_the_seed_gives_every_patient_exactly_one_appointment(calendar):
+    with calendar._connect() as connection:
+        patients = [row[0] for row in connection.execute("SELECT phone FROM patients")]
+    phones = [phone for phone, _start in all_appointments(calendar)]
+    assert sorted(phones) == sorted(patients)
+
+
+def test_the_seed_has_no_past_appointments(calendar):
+    starts = [start for _phone, start in all_appointments(calendar)]
+    assert all(start > TEST_NOW.isoformat() for start in starts)
 
 
 def test_a_first_booking_creates_a_new_patient(calendar):
@@ -272,8 +290,9 @@ def test_a_first_booking_creates_a_new_patient(calendar):
 
 
 def test_a_past_first_visit_marks_the_patient_existing(calendar):
-    assert calendar.mark_attended(RAUL, TEST_NOW, "first_visit")
-    assert calendar.patient_status(RAUL) == "existing"
+    add_past_first_visit(calendar)
+    assert calendar.mark_attended(PAST_NEW, TEST_NOW, "first_visit")
+    assert calendar.patient_status(PAST_NEW) == "existing"
 
 
 def test_a_first_visit_still_ahead_leaves_the_patient_new(calendar):
@@ -282,19 +301,13 @@ def test_a_first_visit_still_ahead_leaves_the_patient_new(calendar):
 
 
 def test_a_cancelled_first_visit_never_counts_as_attended(calendar):
-    set_status(calendar, RAUL, "cancelled")
-    assert not calendar.mark_attended(RAUL, TEST_NOW, "first_visit")
-    assert calendar.patient_status(RAUL) == "new"
+    add_past_first_visit(calendar)
+    set_status(calendar, PAST_NEW, "cancelled")
+    assert not calendar.mark_attended(PAST_NEW, TEST_NOW, "first_visit")
+    assert calendar.patient_status(PAST_NEW) == "new"
 
 
 def test_an_existing_patient_stays_existing_with_no_appointments(calendar):
     set_status(calendar, KNOWN_PHONE, "cancelled")
     calendar.mark_attended(KNOWN_PHONE, TEST_NOW, "first_visit")
     assert calendar.patient_status(KNOWN_PHONE) == "existing"
-
-
-def test_a_past_first_visit_is_not_offered_as_a_free_slot(calendar):
-    # The past slot exists only to show attendance. It is in the past, so nothing finds it.
-    found = calendar.appointments_for(RAUL, 5)
-    assert [item.service for item in found] == ["first_visit"]
-    assert found[0].start_at < TEST_NOW

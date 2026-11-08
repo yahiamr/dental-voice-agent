@@ -15,6 +15,8 @@ Used by:
     pytest
 """
 
+from tests.conftest import TEST_NOW
+
 from dental_agent.models import Details, ErrorCode, ToolCall, ToolExit
 from dental_agent.state import CallState, apply_updates
 from dental_agent.tools.dispatcher import dispatch, run_tool_round
@@ -112,8 +114,21 @@ def test_lookup_with_no_appointment_returns_no_appointment(state, deps):
 
 
 def test_lookup_is_capped_at_five(deps):
-    # A filler patient holds many appointments.
-    state = CallState(conversation_id="c", caller_phone="+34600000101")
+    # The seed gives each patient one appointment, so this test adds six more.
+    phone = "+34600000101"
+    with deps.graph.calendar._connect() as connection:
+        patient = connection.execute("SELECT id FROM patients WHERE phone = ?", (phone,)).fetchone()
+        free = connection.execute(
+            "SELECT id FROM slots WHERE start_at > ? AND id NOT IN "
+            "(SELECT slot_id FROM appointments WHERE status = 'active') ORDER BY start_at LIMIT 6",
+            (TEST_NOW.isoformat(),),
+        ).fetchall()
+        connection.executemany(
+            "INSERT INTO appointments (patient_id, slot_id, service, status, created_at) "
+            "VALUES (?, ?, 'cleaning', 'active', 'now')",
+            [(patient[0], row[0]) for row in free],
+        )
+    state = CallState(conversation_id="c", caller_phone=phone)
     assert len(run("lookup_appointment", state, deps).result.data) == 5
 
 

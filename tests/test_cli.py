@@ -24,6 +24,7 @@ from dental_agent import cli, factories
 from dental_agent.booking.calendar import Calendar
 from dental_agent.booking.seed import seed
 from dental_agent.clock import Clock, FixedClock
+from dental_agent.speech.base import SpeakResult, SpeechResult
 from dental_agent.speech.text import TextSpeech
 
 
@@ -184,3 +185,41 @@ def test_without_the_flag_the_setting_decides(project, checker_setting, monkeypa
 def test_the_checker_flag_takes_only_on_or_off(project):
     with pytest.raises(SystemExit):
         cli.main(["chat", "--checker", "maybe"])
+
+
+class HangUpSpeech(TextSpeech):
+    """A voice backend stand-in that hangs up at once and records being closed."""
+
+    uses_tone = True
+
+    def __init__(self):
+        self.closed = False
+
+    def transcribe(self, expect_yes):
+        return SpeechResult(kind="closed", provider="fake")
+
+    def speak(self, text, asks_confirmation=False):
+        return SpeakResult(ok=True)
+
+    def close(self):
+        self.closed = True
+
+
+def test_voice_passes_the_fixture_folder_and_releases_the_mic(project, monkeypatch, capsys):
+    made = {}
+
+    def fake_speech(settings, mode, keyterms=None, fixture_dir=None):
+        made.update(mode=mode, fixture_dir=fixture_dir, speech=HangUpSpeech())
+        return made["speech"]
+
+    monkeypatch.setattr(factories, "create_speech", fake_speech)
+    cli.main(["voice", "--save-fixtures", "fixtures"])
+    assert made["mode"] == "voice"
+    assert made["fixture_dir"] == "fixtures"
+    assert made["speech"].closed
+    assert "Ctrl-C" in capsys.readouterr().out
+
+
+def test_chat_still_hangs_up_with_ctrl_d(project, capsys):
+    cli.main(["chat"])
+    assert "Ctrl-D" in capsys.readouterr().out

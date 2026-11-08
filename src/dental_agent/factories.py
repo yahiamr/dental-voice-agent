@@ -9,9 +9,9 @@ What it contains:
     - create_embeddings: an embedding model from init_embeddings, or nothing if not installed.
     - create_retriever: hybrid search, or keyword search with no embeddings.
     - create_checkpointer: in-memory by default, SQLite with an optional extra.
-    - create_speech: text mode always gets TextSpeech.
+    - create_speech: text mode always gets TextSpeech, and voice mode gets DeepgramSpeech.
     - create_checker: the checker chain, with each listed backend whose key is set.
-    - build_deps(settings, mode): calls these and returns one Deps object.
+    - build_deps(settings, mode, fixture_dir): calls these and returns one Deps object.
 
 How to understand it:
     To switch provider you change .env, not code. To add a provider you edit this file only. A
@@ -26,6 +26,7 @@ Used by:
 """
 
 import sqlite3
+from pathlib import Path
 from typing import Any, Literal
 
 from langchain.chat_models import init_chat_model
@@ -136,11 +137,33 @@ def create_checkpointer(settings: Settings) -> Any:
     return SqliteSaver(connection, serde=serde)
 
 
-def create_speech(settings: Settings, mode: Literal["text", "voice"]) -> Speech:
-    """Build the speech backend. Text mode always gets TextSpeech."""
+def create_speech(
+    settings: Settings,
+    mode: Literal["text", "voice"],
+    keyterms: list[str] | None = None,
+    fixture_dir: Path | str | None = None,
+) -> Speech:
+    """Build the speech backend. Text mode always gets TextSpeech.
+
+    keyterms are words Deepgram should listen for, such as the clinic's name. fixture_dir, if
+    set, is where each voice turn is saved.
+    """
     if mode == "text":
         return TextSpeech()
-    raise SystemExit("Voice mode arrives in Stage 2. Use `dental-agent chat` for now.")
+    if settings.speech_backend == "local":
+        raise SystemExit(
+            "Local speech is an optional stage that is not built. Set SPEECH_BACKEND=deepgram."
+        )
+    try:
+        import deepgram  # noqa: F401
+        import sounddevice  # noqa: F401
+    except (ImportError, OSError):  # sounddevice raises OSError if PortAudio is missing.
+        raise SystemExit("Voice needs its extra. Run: uv sync --extra voice-deepgram") from None
+    key = _require_key(settings.deepgram_api_key, "DEEPGRAM_API_KEY")
+    # Imported here, so text mode never loads the voice backend.
+    from dental_agent.speech.deepgram import DeepgramSpeech
+
+    return DeepgramSpeech(settings, key, keyterms or [], fixture_dir)
 
 
 def create_checker(settings: Settings) -> CheckerChain:
@@ -167,10 +190,16 @@ def create_checker(settings: Settings) -> CheckerChain:
     return CheckerChain(backends, {backend.name: limits[backend.name] for backend in backends})
 
 
-def build_deps(settings: Settings, mode: Literal["text", "voice"]) -> Deps:
-    """Build every service a call needs."""
+def build_deps(
+    settings: Settings, mode: Literal["text", "voice"], fixture_dir: Path | str | None = None
+) -> Deps:
+    """Build every service a call needs. fixture_dir saves each voice turn, if set."""
+    # The clinic file is only read, so loading it first creates no data. Its names are the
+    # words Deepgram should listen for.
+    clinic = load_clinic(settings.clinic_path)
+    keyterms = [clinic.name] + [service.name for service in clinic.services]
     # Speech and the model come first, so a missing key exits before any data is created.
-    speech = create_speech(settings, mode)
+    speech = create_speech(settings, mode, keyterms, fixture_dir)
     model = create_llm(settings)
     embeddings = create_embeddings(settings)
     graph = GraphDeps(
@@ -179,7 +208,7 @@ def build_deps(settings: Settings, mode: Literal["text", "voice"]) -> Deps:
         # The calendar has no factory, because SQLite is its only implementation.
         calendar=Calendar(settings.calendar_path),
         clock=Clock(),
-        clinic=load_clinic(settings.clinic_path),
+        clinic=clinic,
         retriever=create_retriever(settings, embeddings),
         trace=TraceSink(),
         settings=settings,

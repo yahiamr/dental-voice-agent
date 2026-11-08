@@ -364,14 +364,6 @@ class Calendar:
             row = connection.execute("SELECT MAX(start_at) AS last FROM slots").fetchone()
         return datetime.fromisoformat(row["last"]) if row["last"] else None
 
-    def taken_share(self) -> float:
-        """Return the share of slots holding an active appointment, from 0 to 1."""
-        with self._connect() as connection:
-            taken = connection.execute(
-                "SELECT COUNT(*) AS total FROM appointments WHERE status = 'active'"
-            ).fetchone()["total"]
-        return taken / self.slot_count()
-
 
 def _slot(row: sqlite3.Row) -> Slot:
     """Turn a slots row into a Slot."""

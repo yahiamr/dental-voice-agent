@@ -5,7 +5,8 @@ What this file is:
 
 What it contains:
     - A routing function after each step that has more than one exit: check_emergency,
-      check_confirmation, write_to_calendar, call_model and run_tools.
+      check_confirmation, await_emergency, write_to_calendar and run_tools.
+    - after_call_model, which after_await_emergency uses once the emergency check has passed.
 
 How to understand it:
     These are pure functions, so each can be tested with a state object and no graph. They never
@@ -29,8 +30,20 @@ def after_check_emergency(state: CallState) -> str:
 
 
 def after_check_confirmation(state: CallState) -> str:
-    """Write only after a clear yes. check_confirmation deletes the action on anything else."""
-    return "write_to_calendar" if state.pending_action else "call_model"
+    """A clear yes waits for the emergency check, then writes. Anything else asks the model.
+
+    check_confirmation deletes the action on anything but a yes.
+    """
+    return "await_emergency" if state.pending_action else "call_model"
+
+
+def after_await_emergency(state: CallState) -> str:
+    """An emergency stops the turn. Otherwise write a confirmed action, or act on the model."""
+    if state.fixed_reason:
+        return "use_fixed_line"
+    if state.pending_action:
+        return "write_to_calendar"
+    return after_call_model(state)
 
 
 def after_write_to_calendar(state: CallState) -> str:

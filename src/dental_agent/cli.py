@@ -14,7 +14,9 @@ What it contains:
 How to understand it:
     This file does little. It reads the arguments, makes sure the data exists, prints sample
     numbers, builds Deps and calls run_call. Start here to follow a call from the top. There is
-    no real phone line, so --caller-phone stands in for caller ID.
+    no real phone line, so --caller-phone stands in for caller ID. A text call hangs up with
+    Ctrl-D and a voice call with Ctrl-C. --save-fixtures saves each voice turn's audio and
+    transcript, and the microphone is released when the call ends.
 
 Uses:
     factories.py, session.py, booking/seed.py
@@ -121,7 +123,7 @@ def _call(args: argparse.Namespace, mode: str) -> None:
     settings = Settings()
     if args.checker:
         settings = settings.model_copy(update={"checker_enabled": args.checker == "on"})
-    deps = factories.build_deps(settings, mode)
+    deps = factories.build_deps(settings, mode, fixture_dir=getattr(args, "save_fixtures", None))
     print(_checker_line(settings, deps.graph.checker.names))
     _prepare_data(deps)
     calendar = deps.graph.calendar
@@ -130,8 +132,16 @@ def _call(args: argparse.Namespace, mode: str) -> None:
     for phone, name in samples:
         print(f"  {phone}  {name}")
     phone = _caller(args, calendar, samples[0][0])
-    print(f"Calling from {phone}. Press Ctrl-D to hang up.\n")
-    record = run_call(deps, phone)
+    # Voice has no keyboard input to close, so Ctrl-C hangs up instead.
+    hang_up = "Ctrl-C" if mode == "voice" else "Ctrl-D"
+    print(f"Calling from {phone}. Press {hang_up} to hang up.\n")
+    try:
+        record = run_call(deps, phone)
+    finally:
+        # Release the microphone. Text speech has nothing to release.
+        close = getattr(deps.speech, "close", None)
+        if close is not None:
+            close()
     print(f"\nSaved to {deps.graph.settings.runs_dir}/conversations/{record.conversation_id}.json")
 
 

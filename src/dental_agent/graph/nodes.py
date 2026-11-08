@@ -5,8 +5,12 @@ What this file is:
 
 What it contains:
     - start_turn: clears this turn's fields and sets the deadline.
-    - check_emergency: asks the checker and checks the life-threatening phrases, then combines
-      them with combine_emergency.
+    - check_emergency: checks the life-threatening phrases and asks the checker. With no phrase
+      match, the checker runs on another thread while the turn goes on.
+    - await_emergency: collects that answer and combines it with combine_emergency, before
+      anything is written, run or spoken. On an emergency, the model's work is dropped.
+    - call_model, while a check is running, stops waiting for the model if the check raises
+      the alarm first, so the 112 message is spoken at once.
     - check_confirmation: runs the yes rule. Anything but a yes deletes the pending action.
     - write_to_calendar: validates again, writes to the calendar and builds the result sentence.
     - call_model: calls the model. This is the only step that does. If the final response is
@@ -26,7 +30,15 @@ How to understand it:
     it. The only way there is the check_confirmation step, which runs on the caller's next turn.
 
     Only call_model calls the main model. A check step may call deps.checker, which never
-    raises and never writes or speaks. Each check step writes its own trace events: a guard
+    raises and never writes or speaks.
+
+    The emergency check and the main model run at the same time on most turns, to save about
+    0.25 s. There is no race, because the model's call has no side effects: await_emergency
+    sits after every model call and before write_to_calendar, so nothing the model asked for is
+    spoken, run or written until the check has answered. If the check raises the alarm while
+    the model is still thinking, call_model stops waiting for it, so the 112 message is not
+    held up by a reply that would be dropped. A real call showed that wait: 2.06 s. A phrase match keeps the old order,
+    because a phrase may end the call: the check answers first and the model never starts. Each check step writes its own trace events: a guard
     event, and a checker event with the layer, probabilities, model and attempts, but no text.
 
 Uses:
@@ -39,6 +51,7 @@ Used by:
 import json
 import logging
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import timedelta
 from typing import Any
 
@@ -72,6 +85,10 @@ logger = logging.getLogger(__name__)
 
 # How many appointments write_to_calendar loads into state after a write.
 MAX_FOUND = 5
+# Runs the emergency check alongside the main model. A few threads, because one call runs at a
+# time and each turn has at most one check in flight.
+_CHECKS = ThreadPoolExecutor(max_workers=4, thread_name_prefix="emergency-check")
+AWAIT_GRACE_S = 1.0  # Extra wait for the check beyond the turn's time, against a hang.
 
 
 def start_turn(state: CallState, deps: GraphDeps) -> dict[str, Any]:
@@ -91,11 +108,59 @@ def start_turn(state: CallState, deps: GraphDeps) -> dict[str, Any]:
 
 
 def check_emergency(state: CallState, deps: GraphDeps) -> dict[str, Any]:
-    """Check for an emergency before anything else, including a pending yes."""
+    """Check for an emergency before anything else, including a pending yes.
+
+    With no phrase match, the checker is asked on another thread while the turn goes on, and
+    await_emergency collects its answer before anything is spoken, run or written.
+    """
     clinic = deps.clinic
     text = state.last_caller_text
     phrase_hit = detect(text, clinic.urgent_phrases, clinic.negation_tokens) is not None
-    answer = deps.checker.ask(text, caller_questions(), "caller", _time_left(state, deps))
+    deps.pending_emergency.pop(state.conversation_id, None)  # Never one from an earlier turn.
+    limit = _time_left(state, deps)
+    if phrase_hit or not deps.checker.backends:
+        # A phrase match may end the call, so the main model is not started until the checker
+        # has answered. With no checker, the phrases decide at once.
+        answer = deps.checker.ask(text, caller_questions(), "caller", limit)
+        return _decide_emergency(deps, text, phrase_hit, answer)
+    deps.pending_emergency[state.conversation_id] = _CHECKS.submit(
+        deps.checker.ask, text, caller_questions(), "caller", limit
+    )
+    return {}
+
+
+def await_emergency(state: CallState, deps: GraphDeps) -> dict[str, Any]:
+    """Collect the emergency check that ran alongside the model, before acting on anything.
+
+    It runs before write_to_calendar and after every model call, so no reply is spoken, no tool
+    runs and nothing is written until the answer is in. On an emergency the model's work for
+    this turn is dropped. With no check in flight, as on later tool rounds, it does nothing.
+    """
+    future = deps.pending_emergency.pop(state.conversation_id, None)
+    if future is None:
+        return {}
+    try:
+        # The chain keeps to the turn's time itself. The grace only guards against a hang.
+        answer = future.result(timeout=_time_left(state, deps) + AWAIT_GRACE_S)
+    except Exception as error:  # A lost answer means the phrases decide, and none matched.
+        logger.warning("Emergency check failed: %s", error)
+        answer = None
+    updates = _decide_emergency(deps, state.last_caller_text, False, answer)
+    if updates:
+        # The model's reply and tool calls are never used.
+        updates |= {"turn_messages": [], "reply_text": ""}
+    return updates
+
+
+def _raises(check: Future) -> bool:
+    """Return True if a finished emergency check raised the alarm. No phrase matched."""
+    answer = check.result()
+    layer = answer.layer if answer else None
+    return combine_emergency(False, layer, answer.answers["emergency"] if answer else None)
+
+
+def _decide_emergency(deps: GraphDeps, text: str, phrase_hit: bool, answer: Any) -> dict[str, Any]:
+    """Combine the phrase match and the checker's answer, and trace both."""
     layer = answer.layer if answer else None
     raised = combine_emergency(phrase_hit, layer, answer.answers["emergency"] if answer else None)
     deps.trace.event(
@@ -179,8 +244,21 @@ def call_model(state: CallState, deps: GraphDeps) -> dict[str, Any]:
         facts = state_block(state, actions, deps.clock, deps.clinic)
     messages = build_messages(state, facts)
     started = time.monotonic()
+    model = deps.model.bind_tools(tool_schemas())
+    check = deps.pending_emergency.get(state.conversation_id)
     try:
-        response = deps.model.bind_tools(tool_schemas()).invoke(messages)
+        if check is None:
+            response = model.invoke(messages)
+        else:
+            # The emergency check is still running. If it raises an alarm first, the model's
+            # reply is not waited for: it would be dropped, and the 112 message must not wait.
+            reply = _CHECKS.submit(model.invoke, messages)
+            wait([reply, check], return_when=FIRST_COMPLETED)
+            if not reply.done() and _raises(check):
+                deps.trace.event("model_dropped", reason="emergency")
+                # await_emergency turns this into the emergency line.
+                return {"turn_facts": facts, "fixed_reason": FixedReason.MODEL_FAILURE}
+            response = reply.result()
     except Exception as error:  # Any provider failure must end in a fixed line.
         logger.warning("Model call failed: %s", error)
         deps.trace.event("error", where="call_model", detail=str(error))

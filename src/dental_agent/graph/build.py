@@ -34,6 +34,7 @@ NODES = {
     "start_turn": nodes.start_turn,
     "check_emergency": nodes.check_emergency,
     "check_confirmation": nodes.check_confirmation,
+    "await_emergency": nodes.await_emergency,
     "write_to_calendar": nodes.write_to_calendar,
     "call_model": nodes.call_model,
     "run_tools": nodes.run_tools,
@@ -63,13 +64,17 @@ def build_graph(deps: GraphDeps) -> Any:
         "check_emergency", routing.after_check_emergency, ["use_fixed_line", "check_confirmation"]
     )
     graph.add_conditional_edges(
-        "check_confirmation", routing.after_check_confirmation, ["write_to_calendar", "call_model"]
+        "check_confirmation", routing.after_check_confirmation, ["await_emergency", "call_model"]
+    )
+    # The emergency check may still be running, so every model call and every write waits here.
+    graph.add_edge("call_model", "await_emergency")
+    graph.add_conditional_edges(
+        "await_emergency",
+        routing.after_await_emergency,
+        ["use_fixed_line", "write_to_calendar", "run_tools", "check_model_reply"],
     )
     graph.add_conditional_edges(
         "write_to_calendar", routing.after_write_to_calendar, ["use_fixed_line", "end_turn"]
-    )
-    graph.add_conditional_edges(
-        "call_model", routing.after_call_model, ["run_tools", "check_model_reply", "use_fixed_line"]
     )
     graph.add_conditional_edges(
         "run_tools",

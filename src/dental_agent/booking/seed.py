@@ -7,12 +7,13 @@ What it contains:
     - seed(calendar, clock, clinic, reset=False).
 
 How to understand it:
-    A fixed random seed gives the same data on every run: 60 days of slots, 6 existing sample
-    patients, 2 new sample patients and 8 filler patients, with about 40% of slots taken. The
-    first sample patient has one check-up, which is handy for trying a call. Nora Blanco is new
-    with a first visit ahead, and Raúl Pastor is new with a first visit last week, held in one
-    past slot, so his next call marks him existing. It refuses to overwrite data unless reset
-    is true.
+    A fixed random seed gives the same data on every run: 60 days of slots, 7 existing sample
+    patients, 1 new sample patient and 8 filler patients. Every patient has exactly one
+    appointment, and none is in the past, so a call never meets old bookings. The first sample
+    patient has one check-up, which is handy for trying a call. Nora Blanco is new with a first
+    visit ahead. Raúl Pastor is existing. The attendance rule, where a past first visit makes a
+    new patient existing, is tested with its own data in tests/, because the seed has no past
+    appointments. It refuses to overwrite data unless reset is true.
 
 Uses:
     booking/calendar.py, clock.py, clinic/data.py
@@ -33,10 +34,10 @@ from dental_agent.clock import Clock
 # A fixed seed gives the same data on every run, so instructions and tests can rely on it.
 RANDOM_SEED = 2026
 SEED_DAYS = 60  # How far ahead slots are created.
-TAKEN_SHARE = 0.40  # The share of slots that start out booked.
+EARLIEST_DAYS = 3  # Seeded appointments start this far out, outside the notice period.
 
 # Fictional patients. These numbers are placeholders, so nobody should dial them.
-# The first six are existing patients.
+# The first seven are existing patients.
 SAMPLE_PATIENTS = [
     ("+34600000001", "Lucía Moreno"),
     ("+34600000002", "Javier Ortega"),
@@ -45,11 +46,10 @@ SAMPLE_PATIENTS = [
     ("+34600000005", "Elena Prieto"),
     ("+34600000006", "Marco Gil"),
 ]
-# Two new patients, to show the attendance flag. Nora's first visit is still ahead. Raúl's was
-# last week and was not cancelled, so his next call marks him existing.
+# A new patient whose first visit is still ahead, so she can book nothing else yet.
 NEW_WITH_FIRST_VISIT_AHEAD = ("+34600000007", "Nora Blanco")
-NEW_WITH_FIRST_VISIT_PAST = ("+34600000008", "Raúl Pastor")
-PAST_VISIT_DAYS = 7  # How long ago Raúl's first visit was.
+# An existing patient, listed after Nora so the sample numbers keep their order.
+EXISTING_LISTED_LAST = ("+34600000008", "Raúl Pastor")
 FILLER_NAMES = [
     "Sara Campos",
     "Hugo Nieto",
@@ -60,9 +60,6 @@ FILLER_NAMES = [
     "Nuria Lago",
     "Raúl Pardo",
 ]
-
-# Sample patients 2 to 6 get this many appointments, so "0 to 2" is covered.
-SAMPLE_APPOINTMENTS = [1, 0, 2, 0, 1]
 
 WEEKDAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
@@ -77,75 +74,42 @@ def seed(calendar: Calendar, clock: Clock, clinic: Clinic, reset: bool = False) 
     rng = random.Random(RANDOM_SEED)
     now = clock.now()
     created_at = now.isoformat()
-
     slot_rows = _build_slots(now, clinic)
-    slot_ids = [row[0] for row in slot_rows]
 
-    # Patient IDs start at 1. Sample patients come first, and filler patients follow them.
-    # Everyone seeded is existing, apart from the two new sample patients added at the end.
+    # Patient IDs start at 1, in this order: the six sample patients, the filler patients, then
+    # Nora and Raúl. Only Nora is new.
+    people = [(phone, name, "existing") for phone, name in SAMPLE_PATIENTS]
+    people += [(f"+34600000{101 + offset}", name, "existing") for offset, name in
+               enumerate(FILLER_NAMES)]  # fmt: skip
+    people.append((*NEW_WITH_FIRST_VISIT_AHEAD, "new"))
+    people.append((*EXISTING_LISTED_LAST, "existing"))
     patient_rows = [
-        (index, phone, name, "existing", created_at)
-        for index, (phone, name) in enumerate(SAMPLE_PATIENTS, start=1)
+        (index, phone, name, status, created_at)
+        for index, (phone, name, status) in enumerate(people, start=1)
     ]
-    first_filler_id = len(patient_rows) + 1
-    for offset, name in enumerate(FILLER_NAMES):
-        phone = f"+34600000{101 + offset}"
-        patient_rows.append((first_filler_id + offset, phone, name, "existing", created_at))
 
-    # Decide which slots are taken. Shuffling a copy keeps slot_rows in time order.
-    shuffled = list(slot_ids)
-    rng.shuffle(shuffled)
-    taken = shuffled[: round(len(shuffled) * TAKEN_SHARE)]
-
-    # Slots start three days out for the first patient's check-up, outside the notice period.
-    start_by_id = {row[0]: row[1] for row in slot_rows}
-    earliest_for_sample = (now + timedelta(days=3)).isoformat()
-    later = [slot_id for slot_id in sorted(taken) if start_by_id[slot_id] >= earliest_for_sample]
-
-    appointment_rows = [(1, later[0], "check_up", "active", created_at)]
-    taken_by_sample = {later[0]}
+    # One appointment each, in distinct future slots spread over the 60 days. The eight sample
+    # patients get the earliest, in the order they are listed, so a call soon finds theirs. The
+    # first patient's check-up is the earliest of all.
+    earliest = (now + timedelta(days=EARLIEST_DAYS)).isoformat()
+    future = [row[0] for row in slot_rows if row[1] >= earliest]
+    slots_in_order = [future[0], *sorted(rng.sample(future[1:], len(patient_rows) - 1))]
+    fillers = len(FILLER_NAMES)
+    samples = patient_rows[: len(SAMPLE_PATIENTS)] + patient_rows[len(SAMPLE_PATIENTS) + fillers :]
+    order = samples + patient_rows[len(SAMPLE_PATIENTS) : len(SAMPLE_PATIENTS) + fillers]
     services = [item.id for item in clinic.services if not item.first_visit]
-
-    # Give sample patients 2 to 6 their planned number of appointments.
-    next_index = 1
-    for patient_id, count in enumerate(SAMPLE_APPOINTMENTS, start=2):
-        for _ in range(count):
-            slot_id = later[next_index]
-            next_index += 1
-            taken_by_sample.add(slot_id)
-            appointment_rows.append(
-                (patient_id, slot_id, rng.choice(services), "active", created_at)
-            )
-
-    # Filler patients hold all the other taken slots.
-    filler_ids = [row[0] for row in patient_rows[len(SAMPLE_PATIENTS) :]]
-    for slot_id in taken:
-        if slot_id not in taken_by_sample:
-            patient_id = rng.choice(filler_ids)
-            appointment_rows.append(
-                (patient_id, slot_id, rng.choice(services), "active", created_at)
-            )
-
-    # The two new patients come last, so the rows above do not change.
     first_visit = next(item.id for item in clinic.services if item.first_visit)
-    nora_id, raul_id = len(patient_rows) + 1, len(patient_rows) + 2
-    patient_rows.append((nora_id, *NEW_WITH_FIRST_VISIT_AHEAD, "new", created_at))
-    patient_rows.append((raul_id, *NEW_WITH_FIRST_VISIT_PAST, "new", created_at))
-    free_later = [
-        slot_id
-        for slot_id in slot_ids
-        if slot_id not in taken and start_by_id[slot_id] >= earliest_for_sample
-    ]
-    appointment_rows.append((nora_id, free_later[0], first_visit, "active", created_at))
-    # Raúl's visit needs a slot in the past. Past slots are never searched, so it cannot be
-    # offered to anyone.
-    past_start = now.replace(hour=10, minute=0, second=0, microsecond=0) - timedelta(
-        days=PAST_VISIT_DAYS
-    )
-    past_id = len(slot_rows) + 1
-    past_end = past_start + timedelta(minutes=clinic.slot_minutes)
-    slot_rows.append((past_id, past_start.isoformat(), past_end.isoformat()))
-    appointment_rows.append((raul_id, past_id, first_visit, "active", created_at))
+    appointment_rows = []
+    for (patient_id, _phone, _name, status, _created), slot_id in zip(
+        order, slots_in_order, strict=True
+    ):
+        if patient_id == 1:
+            service = "check_up"
+        elif status == "new":
+            service = first_visit
+        else:
+            service = rng.choice(services)
+        appointment_rows.append((patient_id, slot_id, service, "active", created_at))
 
     calendar.seed_rows(patient_rows, slot_rows, appointment_rows)
 

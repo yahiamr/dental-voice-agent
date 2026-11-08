@@ -17,6 +17,7 @@ Used by:
 """
 
 import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -35,6 +36,7 @@ from dental_agent.factories import (
     create_retriever,
     create_speech,
 )
+from dental_agent.speech.deepgram import DeepgramSpeech
 from dental_agent.speech.text import TextSpeech
 
 
@@ -128,10 +130,61 @@ def test_text_mode_always_gets_text_speech():
     assert isinstance(create_speech(settings(), "text"), TextSpeech)
 
 
-def test_voice_mode_exits_with_a_message_before_stage_2():
+@pytest.fixture
+def voice_extra(monkeypatch):
+    """Stand in for the voice extra, so these tests pass without deepgram-sdk or sounddevice.
+
+    `uv sync` leaves the extra out, so a reviewer's first test run must not need it.
+    """
+    deepgram = ModuleType("deepgram")
+    deepgram.DeepgramClient = lambda **options: SimpleNamespace(options=options)
+    monkeypatch.setitem(sys.modules, "deepgram", deepgram)
+    monkeypatch.setitem(sys.modules, "sounddevice", ModuleType("sounddevice"))
+
+
+def test_voice_mode_gets_deepgram_with_the_key_terms_and_fixture_folder(tmp_path, voice_extra):
+    speech = create_speech(
+        settings(deepgram_api_key="test-key"), "voice", ["Mirador"], tmp_path / "fixtures"
+    )
+    assert isinstance(speech, DeepgramSpeech)
+    assert speech.keyterms == ["Mirador"]
+    assert speech.fixture_dir == tmp_path / "fixtures"
+
+
+def test_voice_mode_exits_naming_the_missing_deepgram_key(voice_extra):
     with pytest.raises(SystemExit) as caught:
         create_speech(settings(), "voice")
-    assert "voice" in str(caught.value).lower()
+    assert "DEEPGRAM_API_KEY" in str(caught.value)
+
+
+def test_voice_mode_exits_with_the_install_command_without_the_extra(monkeypatch):
+    # A None entry in sys.modules makes the import fail, as it would without the extra.
+    monkeypatch.setitem(sys.modules, "deepgram", None)
+    with pytest.raises(SystemExit) as caught:
+        create_speech(settings(deepgram_api_key="test-key"), "voice")
+    assert "uv sync --extra voice-deepgram" in str(caught.value)
+
+
+def test_local_speech_exits_because_it_is_not_built():
+    with pytest.raises(SystemExit) as caught:
+        create_speech(settings(speech_backend="local", deepgram_api_key="test-key"), "voice")
+    assert "SPEECH_BACKEND=deepgram" in str(caught.value)
+
+
+def test_build_deps_in_voice_mode_boosts_the_clinic_and_service_names(tmp_path, voice_extra):
+    deps = build_deps(
+        settings(
+            anthropic_api_key="test-key",
+            deepgram_api_key="test-key",
+            calendar_path=tmp_path / "calendar.sqlite",
+        ),
+        "voice",
+        fixture_dir=tmp_path / "fixtures",
+    )
+    assert isinstance(deps.speech, DeepgramSpeech)
+    assert deps.speech.keyterms[0] == "Mirador Dental"
+    assert "check-up" in deps.speech.keyterms
+    assert deps.speech.fixture_dir == tmp_path / "fixtures"
 
 
 def test_build_deps_holds_every_service(tmp_path):

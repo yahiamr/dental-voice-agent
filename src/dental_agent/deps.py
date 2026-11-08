@@ -6,7 +6,7 @@ What this file is:
 
 What it contains:
     - GraphDeps: model, checkpointer, calendar, clock, clinic data, retriever, trace sink,
-      settings and the checker chain.
+      settings, the checker chain, and the emergency check in flight.
     - Deps: GraphDeps plus speech.
     - normalise_stop(response): returns complete or cut_off.
 
@@ -23,7 +23,7 @@ Used by:
     factories.py, graph/, tools/, session.py
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage
@@ -53,6 +53,9 @@ class GraphDeps:
     trace: TraceSink
     settings: Settings
     checker: CheckerChain  # Never raises. An empty chain means the fixed rules decide alone.
+    # The emergency check running alongside the main model, by conversation ID. It holds a
+    # running request, not call state, so it is kept here rather than in the checkpoint.
+    pending_emergency: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

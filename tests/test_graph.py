@@ -24,6 +24,8 @@ Used by:
     pytest
 """
 
+import time
+
 import pytest
 from tests.conftest import TEST_NOW, build_test_deps
 from tests.fakes import (
@@ -42,6 +44,7 @@ from dental_agent.graph.build import build_graph, graph_diagram
 from dental_agent.models import (
     EndReason,
     FixedReason,
+    PendingAction,
     ToolExit,
 )
 from dental_agent.session import start_fields
@@ -608,14 +611,14 @@ def checker_events(call) -> list[dict]:
     return [e for e in call.deps.graph.trace.events if e["kind"] == "checker"]
 
 
-def test_a_jev_yes_ends_the_call_with_no_phrase_and_no_model(make_call, clinic):
-    # CUJ 1: no emergency phrase matches, but Jev says yes.
-    call = make_call(checker=jev_says(True, 0.79))
+def test_a_jev_yes_ends_the_call_with_no_phrase_and_drops_the_model(make_call, clinic):
+    # CUJ 1: no emergency phrase matches, but Jev says yes. The main model ran alongside the
+    # check, and its reply is dropped.
+    call = make_call(text_reply("Which day suits you?"), checker=jev_says(True, 0.79))
     state = call.say("my lips are turning blue")
     assert state.reply_text == clinic.line("urgent_message")
     assert state.end_reason is EndReason.URGENT
     assert state.urgent_level == "life_threatening"
-    assert call.deps.graph.model.seen == []
 
 
 def test_a_jev_no_over_a_phrase_match_lets_the_call_continue(make_call):
@@ -786,3 +789,141 @@ def test_the_reply_check_writes_a_checker_event_with_no_text(make_call):
     events = [e for e in call.deps.graph.trace.events if e["kind"] == "checker"]
     assert [e["step"] for e in events] == ["check_emergency", "check_model_reply"]
     assert "Which day suits you?" not in str(events[1])
+
+
+# ---------- the emergency check alongside the main model ----------
+
+
+def timed_jev(yes: bool, order: list[str], wait_s: float, *then: CheckAnswer) -> CheckerChain:
+    """A Jev chain whose emergency answer takes wait_s, recording when it starts and ends."""
+
+    def slow():
+        order.append("check starts")
+        time.sleep(wait_s)
+        order.append("check ends")
+
+    answer = CheckAnswer(
+        layer="jev", answers={"emergency": yes}, probabilities={"emergency": 0.9}, model="m"
+    )
+    backend = ScriptedChecker("jev", [answer, *then])
+    backend.on_call = lambda: slow() if backend.calls == 1 else None
+    return CheckerChain([backend], {"jev": 2.0})
+
+
+def test_without_a_phrase_the_check_runs_while_the_model_thinks(make_call):
+    order = []
+    call = make_call(
+        text_reply("Which day suits you?"),
+        on_call=lambda: (order.append("model starts"), time.sleep(0.3)),
+        checker=timed_jev(False, order, 0.3, CLEAN_REPLY),
+    )
+    started = time.monotonic()
+    state = call.say("I'd like a cleaning")
+    elapsed = time.monotonic() - started
+    assert state.reply_text == "Which day suits you?"
+    assert order.index("model starts") < order.index("check ends")
+    assert elapsed < 0.55  # One after the other would take at least 0.6 s.
+
+
+def test_an_emergency_answered_after_the_model_drops_its_reply(make_call, clinic):
+    order = []
+    call = make_call(text_reply("Sure, which day?"), checker=timed_jev(True, order, 0.2))
+    state = call.say("my lips are turning blue")
+    assert state.reply_text == clinic.line("urgent_message")
+    assert state.end_reason is EndReason.URGENT
+    assert state.urgent_level == "life_threatening"
+    assert "Sure, which day?" not in [item.get("text") for item in state.messages]
+
+
+def test_a_dropped_reply_runs_none_of_its_tools(make_call):
+    order = []
+    call = make_call(*booking_turn(), checker=timed_jev(True, order, 0.2))
+    state = call.say("my lips are turning blue, book me a check-up")
+    assert state.end_reason is EndReason.URGENT
+    kinds = [event["kind"] for event in call.deps.graph.trace.events]
+    assert "tool_call" not in kinds
+    assert state.pending_action is None
+
+
+def test_a_yes_waits_for_the_check_before_anything_is_written(make_call):
+    no = CheckAnswer(layer="jev", answers={"emergency": False}, model="m")
+    order = []
+    call = make_call(*booking_turn(), checker=timed_jev(False, order, 0.0, no))
+    call.say("Book me")
+    # The second turn's emergency answer is a slow yes, to a plain "yes".
+    later = CheckAnswer(layer="jev", answers={"emergency": True}, model="m")
+    backend = call.deps.graph.checker.backends[0]
+    backend.results = [later]
+    backend.on_call = lambda: time.sleep(0.2)
+    state = call.say("yes", awaiting_yes=True)
+    assert state.end_reason is EndReason.URGENT
+    assert call.actions == []
+
+
+def test_a_phrase_match_is_still_checked_before_the_model_starts(make_call):
+    # A phrase can end the call, so the model is not started until the checker has answered.
+    order = []
+    call = make_call(
+        text_reply("Yes, the clinic has step-free access."),
+        on_call=lambda: order.append("model starts"),
+        checker=timed_jev(False, order, 0.1, CLEAN_REPLY),
+    )
+    call.say(STROKE_LAST_YEAR)
+    assert order == ["check starts", "check ends", "model starts"]
+
+
+def test_with_the_checker_off_the_phrases_decide_before_the_model(make_call, clinic):
+    call = make_call()
+    state = call.say("my son can't breathe")
+    assert state.reply_text == clinic.line("urgent_message")
+    assert call.deps.graph.model.seen == []
+
+
+def test_the_check_events_are_traced_once_per_turn(make_call):
+    order = []
+    call = make_call(text_reply("Hello."), checker=timed_jev(False, order, 0.05, CLEAN_REPLY))
+    call.say("Hi")
+    guards = [e for e in call.deps.graph.trace.events if e.get("name") == "check_emergency"]
+    steps = [e["step"] for e in checker_events(call)]
+    assert len(guards) == 1 and guards[0]["decision"] == "pass"
+    assert steps.count("check_emergency") == 1
+
+
+def test_after_await_emergency_routes_each_case():
+    urgent = CallState(fixed_reason=FixedReason.URGENT)
+    assert routing.after_await_emergency(urgent) == "use_fixed_line"
+    pending = PendingAction(action_id="x", kind="book", offer=None)
+    assert routing.after_await_emergency(CallState(pending_action=pending)) == "write_to_calendar"
+    with_tools = CallState(turn_messages=[tool_reply(SAVE)])
+    assert routing.after_await_emergency(with_tools) == "run_tools"
+    with_text = CallState(turn_messages=[text_reply("Hello.")])
+    assert routing.after_await_emergency(with_text) == "check_model_reply"
+
+
+def test_an_emergency_is_spoken_without_waiting_for_a_slow_model(make_call, clinic):
+    # A real call: Jev answered in 0.28 s, but the 112 message waited for a 2.06 s model reply
+    # that was then dropped.
+    order = []
+    call = make_call(
+        text_reply("Sure, which day?"),
+        on_call=lambda: time.sleep(1.0),
+        checker=timed_jev(True, order, 0.05),
+    )
+    started = time.monotonic()
+    # The real transcript. "Choking" is an emergency phrase, but "shocking" is not.
+    state = call.say("I'm shocking and bleeding a lot.")
+    assert time.monotonic() - started < 0.6
+    assert state.reply_text == clinic.line("urgent_message")
+    assert state.end_reason is EndReason.URGENT
+    assert "model_dropped" in [event["kind"] for event in call.deps.graph.trace.events]
+
+
+def test_a_quick_no_still_waits_for_the_models_reply(make_call):
+    order = []
+    call = make_call(
+        text_reply("Which day suits you?"),
+        on_call=lambda: time.sleep(0.3),
+        checker=timed_jev(False, order, 0.05, CLEAN_REPLY),
+    )
+    state = call.say("I'd like a cleaning")
+    assert state.reply_text == "Which day suits you?"

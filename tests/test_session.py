@@ -17,7 +17,7 @@ Used by:
 import json
 
 import pytest
-from tests.conftest import build_test_deps
+from tests.conftest import PAST_NEW, add_past_first_visit, build_test_deps
 from tests.fakes import (
     FailingCalendar,
     FakeSpeech,
@@ -350,10 +350,11 @@ def test_the_trace_names_the_speech_backend_really_used(run, tmp_path):
     assert start["speech_backend"] == "fake"
 
 
-def test_a_past_first_visit_makes_the_caller_existing_at_start(run):
-    record, _, _ = run(["Hi"], [text_reply("Hello")], phone="+34600000008")
+def test_a_past_first_visit_makes_the_caller_existing_at_start(run, calendar):
+    add_past_first_visit(calendar)
+    record, _, _ = run(["Hi"], [text_reply("Hello")], phone=PAST_NEW)
     assert record.details.patient_type == "existing"
-    assert record.details.name == "Raúl Pastor"
+    assert record.details.name == "Teo Lara"
 
 
 def test_a_new_patient_on_record_keeps_their_name_and_stays_new(run):

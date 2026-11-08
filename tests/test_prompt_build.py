@@ -11,11 +11,12 @@ Used by:
     pytest
 """
 
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from dental_agent.models import ActionRecord, Details, Offer, PendingAction
+from dental_agent.models import ActionRecord, Appointment, Details, Offer, PendingAction
 from dental_agent.prompts.build import build_messages, state_block
 from dental_agent.state import CallState
 
@@ -134,3 +135,31 @@ def test_the_block_says_a_booked_first_visit_blocks_other_bookings(clock, clinic
     assert "Caller: Nora Blanco, a new patient with a first-visit consultation booked" in block
     bookable = block.split("Services this caller can book:")[1].split("\n\n")[0]
     assert "none until their first visit" in bookable
+
+
+def found(db_id, spoken):
+    """An appointment found for the caller, with its per-call ID."""
+    return Appointment(
+        appointment_id=f"a{db_id}",
+        db_id=db_id,
+        patient_name="Lucía Moreno",
+        service="check-up",
+        db_slot_id=db_id,
+        start_at=datetime(2026, 11, 10, 10, 0, tzinfo=ZoneInfo("Europe/Madrid")),
+        status="active",
+        spoken=spoken,
+    )
+
+
+def test_a_found_appointment_booked_in_this_call_is_marked(clock, clinic):
+    # After a booking, the caller's appointments are reloaded, so the new one is listed twice:
+    # once as found and once as an action. The mark stops the model reading two bookings.
+    state = CallState(
+        found_appointments=[found(1, "Tuesday 10 November at 10:00"), found(2, "Friday 13")]
+    )
+    block = state_block(state, [action()], clock, clinic)
+    assert (
+        "a1: check-up for Lucía Moreno on Tuesday 10 November at 10:00 (booked in this call)"
+        in block
+    )
+    assert "a2: check-up for Lucía Moreno on Friday 13\n" in block + "\n"
