@@ -5,7 +5,8 @@ What this file is:
 
 What it contains:
     - An input model for each of the 10 tools under Tool Contracts.
-    - FindSlotsInput.appointment_id, set when the search is for moving a found appointment.
+    - FindSlotsInput.appointment_id, set when the search is for moving a found appointment, and
+      FindSlotsInput.time, an exact HH:MM time the caller asked for.
 
 How to understand it:
     These classes produce the tool schemas sent to the model, and they check what comes back.
@@ -20,7 +21,7 @@ Used by:
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from dental_agent.clinic.data import Clinic
 from dental_agent.models import ErrorCode, ToolOutcome, ToolResult
@@ -107,6 +108,20 @@ class FindSlotsInput(BaseModel):
         default=None,
         description="Set when searching for a new time for this found appointment.",
     )
+    time: str | None = Field(
+        default=None,
+        pattern=r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$",
+        description="Set when the caller asks for one exact time, as HH:MM, such as 10:00.",
+    )
+
+    @field_validator("time")
+    @classmethod
+    def _two_digit_hour(cls, value: str | None) -> str | None:
+        """Write 9:00 as 09:00, so it compares equal to the stored times."""
+        if value is None:
+            return None
+        hour, minute = value.split(":")
+        return f"{int(hour):02d}:{minute}"
 
 
 class LookupAppointmentInput(BaseModel):

@@ -11,6 +11,7 @@ can be made again at any time by rerunning the commands below.
 | `scenarios.json` | The same numbers in a form a script can compare. The next full run is compared with it | `evals/evaluate.py` |
 | `intent.md` | The golden set: how well each layer reads meaning in single messages | `evals/intent_eval.py --save` |
 | `retrieval.md` | Document search: how often keyword, vector and hybrid search find the piece that answers a labelled question | `evals/retrieval_eval.py --save` |
+| `coverage.md` | Test coverage: the guards and booking against the design's 85% target, then every file | `pytest --cov` and `coverage report` |
 | `scenarios-<provider>-<model>.md` and `.json` | A full run on another model, or with `-no-checker` at the end, with the checker off. Each setting keeps its own files, so it never replaces the main result | `evals/evaluate.py --provider ... --model ...` |
 
 ## The two evaluations
@@ -149,6 +150,17 @@ Document search, which needs no API key, only the embedding model. This replaces
 
 ```bash
 uv run python -m evals.retrieval_eval --save evals/results/retrieval.md
+```
+
+Test coverage, which needs no key. The first command fails if the guards and booking fall
+below 85%. The second writes the per-file table that `coverage.md` holds:
+
+```bash
+uv run pytest --cov=dental_agent.guards --cov=dental_agent.booking --cov-branch --cov-fail-under=85
+```
+
+```bash
+uv run pytest -q --cov=dental_agent --cov-branch --cov-report= && uv run coverage report --format=markdown --skip-empty
 ```
 
 The held-out sets, `evals/intent_holdout.yaml` and `evals/intent_holdout_2.yaml`, are not part of

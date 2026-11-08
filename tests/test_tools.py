@@ -15,7 +15,7 @@ Used by:
     pytest
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 from tests.conftest import PAST_NEW, TEST_NOW, add_past_first_visit
 
@@ -570,3 +570,78 @@ def test_find_slots_for_a_move_points_only_to_prepare_reschedule(deps):
     assert "prepare_reschedule" in message
     assert "prepare_booking" not in message
     assert "save_details" not in message
+
+
+# An exact time: the 2 earliest slots are not the only free ones.
+TUESDAY = {"service": "check_up", "date_from": "2026-11-17", "date_to": "2026-11-17"}
+
+
+def test_an_exact_free_time_is_offered_even_when_earlier_times_are_free(deps):
+    # The bug: asked about 10:00, the search returned 09:00 and 09:30, and the bot said 10:00
+    # was taken. 10:00 on Tuesday 17 November is free in the sample data.
+    outcome = run("find_slots", known_caller(), deps, TUESDAY | {"time": "10:00"})
+    assert outcome.result.ok
+    assert [item["spoken"] for item in outcome.result.data] == ["Tuesday 17 November at 10:00"]
+    assert "is free" in outcome.result.message
+
+
+def test_an_exact_time_that_is_taken_returns_the_nearest_free_times(deps):
+    slot = deps.graph.calendar.free_slots(
+        date(2026, 11, 17), date(2026, 11, 17), None, ("10:00", "10:01"), 1, TEST_NOW
+    )[0]
+    take(deps, slot)
+    outcome = run("find_slots", known_caller(), deps, TUESDAY | {"time": "10:00"})
+    spoken = [item["spoken"] for item in outcome.result.data]
+    assert spoken == ["Tuesday 17 November at 09:30", "Tuesday 17 November at 10:30"]
+    assert "not free" in outcome.result.message
+
+
+def test_a_time_between_slots_returns_the_nearest_free_times(deps):
+    outcome = run("find_slots", known_caller(), deps, TUESDAY | {"time": "10:15"})
+    spoken = [item["spoken"] for item in outcome.result.data]
+    assert spoken == ["Tuesday 17 November at 10:00", "Tuesday 17 November at 10:30"]
+    assert "not free" in outcome.result.message
+
+
+def test_an_exact_time_can_be_checked_across_several_days(deps):
+    args = TUESDAY | {"date_to": "2026-11-19", "time": "10:00"}
+    spoken = [item["spoken"] for item in run("find_slots", known_caller(), deps, args).result.data]
+    assert spoken == ["Tuesday 17 November at 10:00", "Wednesday 18 November at 10:00"]
+
+
+def test_a_badly_written_time_is_invalid_input(deps):
+    outcome = run("find_slots", known_caller(), deps, TUESDAY | {"time": "ten o'clock"})
+    assert outcome.result.error_code is ErrorCode.INVALID_INPUT
+
+
+def take(deps, slot):
+    """Give a slot to another patient, each under its own action id."""
+    from dental_agent.models import Offer, PendingAction
+
+    offer = Offer(slot_id="x", db_slot_id=slot.db_slot_id, service="check_up", spoken="t")
+    action = PendingAction(action_id=f"taken-{slot.db_slot_id}", kind="book", offer=offer)
+    deps.graph.calendar.book(
+        action, "c-other", "+34600888888", "Luis Mora", "check_up", "t", "Booked.", TEST_NOW
+    )
+
+
+def test_a_one_digit_hour_is_accepted(deps):
+    # A model may write "9:00". Refusing it would cost a whole tool round.
+    outcome = run("find_slots", known_caller(), deps, TUESDAY | {"time": "9:00"})
+    assert [item["spoken"] for item in outcome.result.data] == ["Tuesday 17 November at 09:00"]
+
+
+def test_when_the_asked_day_is_full_the_message_names_the_day_of_the_nearest_times(deps):
+    calendar = deps.graph.calendar
+    for slot in calendar.free_slots(
+        date(2026, 11, 17), date(2026, 11, 17), None, None, 99, TEST_NOW
+    ):
+        take(deps, slot)
+    args = TUESDAY | {"date_to": "2026-11-18", "time": "10:00"}
+    calendar_slot = calendar.free_slots(
+        date(2026, 11, 18), date(2026, 11, 18), None, ("10:00", "10:01"), 1, TEST_NOW
+    )[0]
+    take(deps, calendar_slot)
+    outcome = run("find_slots", known_caller(), deps, args)
+    assert "not free on the days asked for" in outcome.result.message
+    assert "Wednesday 18 November" in outcome.result.message

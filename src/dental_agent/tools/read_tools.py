@@ -9,7 +9,9 @@ What it contains:
       it searches new times for that found appointment's own service, so a new patient can move
       their first visit, and refuses an appointment inside the notice period. Its result tells
       the model to prepare a time the caller already asked for, without asking first: with
-      prepare_booking for a booking search, and prepare_reschedule for a move search.
+      prepare_booking for a booking search, and prepare_reschedule for a move search. With time
+      (HH:MM), it looks up that exact time, and if it is not free returns the nearest free
+      times that day and says so, because the earliest-first search never saw later times.
     - lookup_appointment: this caller's active appointments still to come, up to 5.
     - get_clinic_facts: services, prices, hours or rules from clinic.yaml.
     - search_clinic_info: searches the patient handbook, and returns up to 3 pieces, each with
@@ -27,7 +29,7 @@ Used by:
     tools/__init__.py
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from dental_agent.clinic.retriever import SearchUnavailable
 from dental_agent.deps import GraphDeps
@@ -45,6 +47,7 @@ from dental_agent.tools.schemas import (
 
 MAX_OFFERS = 2  # Two choices are easy to follow by ear.
 MAX_APPOINTMENTS = 5  # A limit, so a spoken list stays short.
+DAY_SEARCH_LIMIT = 500  # Enough free slots to find the nearest to an exact time on any day.
 MAX_PIECE_CHARS = 1000  # A search piece longer than this is cut, so results stay short.
 
 # Sent with every search result, because the model decides here what to say. A search always
@@ -53,6 +56,12 @@ SEARCH_MESSAGE = (
     "Answer only from what these pieces say. If they do not answer the question, say you do "
     "not have that information and give the clinic number. Prices, hours and booking rules "
     "come from get_clinic_facts and the booking tools, which win if they differ."
+)
+# Sent when the exact time asked for is not free. No prepare, because the caller did not ask
+# for these times.
+NOT_FREE_MESSAGE = (
+    "{time} is not free on the days asked for, or is not a time the clinic books. The nearest "
+    "free times are on {day}: these. Say so in one sentence, and offer them."
 )
 NOTHING_FOUND_MESSAGE = (
     "Nothing in the clinic documents matches. Say you do not have that information and give "
@@ -116,14 +125,18 @@ def find_slots(args: FindSlotsInput, state: CallState, deps: GraphDeps) -> ToolO
     # "any" means no time limit, and the other two map to the opening hours.
     hours = {"morning": clinic.hours.morning, "afternoon": clinic.hours.afternoon}
     earliest = now + timedelta(hours=clinic.booking_window.min_hours_ahead)
-    slots = deps.calendar.free_slots(
-        args.date_from,
-        args.date_to,
-        args.weekdays,
-        hours.get(args.time_window),
-        MAX_OFFERS,
-        earliest,
-    )
+    exact_free = None  # Whether an exact time asked for is free. None when none was asked.
+    if args.time is not None:
+        slots, exact_free = _exact_time(deps, args, earliest)
+    else:
+        slots = deps.calendar.free_slots(
+            args.date_from,
+            args.date_to,
+            args.weekdays,
+            hours.get(args.time_window),
+            MAX_OFFERS,
+            earliest,
+        )
     if not slots:
         # Old offers are cleared, so the model cannot pick a time from an earlier search.
         return failure(ErrorCode.NO_SLOTS, clinic, updates={"offers": []})
@@ -143,8 +156,46 @@ def find_slots(args: FindSlotsInput, state: CallState, deps: GraphDeps) -> ToolO
     data = [{"slot_id": offer.slot_id, "spoken": offer.spoken} for offer in offers]
     updates = {"offers": offers, "next_slot_number": number + len(offers)}
     message = BOOK_FOUND_MESSAGE if args.appointment_id is None else MOVE_FOUND_MESSAGE
+    if exact_free is True:
+        message = f"{args.time} is free on the days shown. " + message
+    elif exact_free is False:
+        day = spoken_slot(slots[0].start_at).rsplit(" at ", 1)[0]
+        message = NOT_FREE_MESSAGE.format(time=args.time, day=day)
     result = ToolResult(ok=True, data=data, message=message)
     return ToolOutcome(result=result, updates=updates)
+
+
+def _exact_time(deps: GraphDeps, args: FindSlotsInput, earliest: datetime) -> tuple[list, bool]:
+    """Return the slots at exactly args.time, or the nearest free ones, and whether it was free.
+
+    The earliest-first search only ever saw the first two times of a day, so a caller asking
+    about 10:00 heard it was taken while it was free. An exact time is looked up on its own.
+    If it is not free, or is not a time the clinic books, the nearest free times on the first
+    day that has any are returned instead, so the caller still gets a real choice.
+    """
+    start = datetime.strptime(args.time, "%H:%M")
+    exact_window = (args.time, (start + timedelta(minutes=1)).strftime("%H:%M"))
+    calendar = deps.calendar
+    exact = calendar.free_slots(
+        args.date_from, args.date_to, args.weekdays, exact_window, MAX_OFFERS, earliest
+    )
+    if exact:
+        return exact, True
+    free = calendar.free_slots(
+        args.date_from, args.date_to, args.weekdays, None, DAY_SEARCH_LIMIT, earliest
+    )
+    if not free:
+        return [], False
+    first_day = free[0].start_at.date()
+    target = start.hour * 60 + start.minute
+
+    def distance(slot) -> tuple[int, datetime]:
+        minutes = slot.start_at.hour * 60 + slot.start_at.minute
+        return abs(minutes - target), slot.start_at
+
+    same_day = [slot for slot in free if slot.start_at.date() == first_day]
+    nearest = sorted(same_day, key=distance)[:MAX_OFFERS]
+    return sorted(nearest, key=lambda slot: slot.start_at), False
 
 
 def with_call_ids(rows: list[Appointment], first_number: int) -> list[Appointment]:

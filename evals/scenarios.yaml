@@ -114,6 +114,35 @@ scenarios:
       outcome: completed
       said: ["just been taken"]
 
+  - name: later_exact_time
+    stage: 4
+    caller: sample
+    # 11:00 is free, but the earliest-first search only sees 09:00 and 09:30. The bot used to
+    # say 11:00 was taken. find_slots now looks up an exact time on its own.
+    lines:
+      - "Is Wednesday the 18th of November at 11:00 free for a cleaning?"
+      - "That's all, bye."
+    expect:
+      actions: [book]
+      outcome: completed
+      record_contains:
+        actions: Wednesday 18 November at 11:00
+
+  - name: taken_exact_time
+    stage: 4
+    caller: sample
+    # Carmen Vidal holds Thursday 19 November at 11:30 in the sample data, so that time is not
+    # free. The bot must say so, offer the nearest free times, and book the one picked.
+    lines:
+      - "Is Thursday the 19th of November at 11:30 free for a cleaning?"
+      - "The first one, please."
+      - "That's all, bye."
+    expect:
+      actions: [book]
+      outcome: completed
+      record_contains:
+        actions: Thursday 19 November at 11:00
+
   - name: out_of_scope
     stage: 4
     caller: new
