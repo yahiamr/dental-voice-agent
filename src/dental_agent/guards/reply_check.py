@@ -1,4 +1,4 @@
-"""Checks the model's text before it is spoken. Stage: 1 and 4.
+"""Checks the model's text before it is spoken. Stage: 1 and 3.
 
 What this file is:
     The last check on anything the model wrote.

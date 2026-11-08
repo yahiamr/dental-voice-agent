@@ -1,4 +1,4 @@
-"""Tests for the turn graph. Stage: 1 and 4.
+"""Tests for the turn graph. Stage: 1 and 3.
 
 What this file is:
     Runs whole turns with ScriptedModel and proves every path.
@@ -929,7 +929,7 @@ def test_a_quick_no_still_waits_for_the_models_reply(make_call):
     assert state.reply_text == "Which day suits you?"
 
 
-# Stage 4: reschedule and cancel. Lucía (KNOWN_PHONE) has one check-up at least 3 days ahead.
+# Stage 3: reschedule and cancel. Lucía (KNOWN_PHONE) has one check-up at least 3 days ahead.
 LOOKUP = ("lookup_appointment", {})
 FIND_MOVE = (
     "find_slots",

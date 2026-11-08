@@ -1,4 +1,4 @@
-"""Tests for the tools. Stage: 1, 4 and 5.
+"""Tests for the tools. Stage: 1, 3 and 5.
 
 What this file is:
     Proves each tool follows its contract.
@@ -367,7 +367,7 @@ def test_find_slots_refuses_a_second_first_visit_for_a_new_patient(deps):
     assert outcome.result.error_code is ErrorCode.FIRST_VISIT_BOOKED
 
 
-# Stage 4: reschedule and cancel.
+# Stage 3: reschedule and cancel.
 NORA = "+34600000007"  # New, with a first visit booked ahead.
 
 

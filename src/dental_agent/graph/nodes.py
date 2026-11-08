@@ -1,4 +1,4 @@
-"""One small function per graph step. Stage: 1, 2 and 4.
+"""One small function per graph step. Stage: 1, 2 and 3.
 
 What this file is:
     The steps of a turn. Each function reads state and returns only the fields it changes.

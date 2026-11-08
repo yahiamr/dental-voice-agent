@@ -94,7 +94,7 @@ negation_tokens: ["no", "not", "without", "never"]
 # were added with the checker design, from golden-set claims the list missed.
 claim_phrases:
   book: ["you're booked", "you are booked", "you're all set", "all set", "that's booked", "i've booked", "i have booked", "is confirmed", "is scheduled", "that's sorted", "i've put you down for", "i have put you down for", "we've put you down for"]
-  # Stage 4 review: "been ..." covers "has been" and "that's been", and both spellings of
+  # Stage 3 review: "been ..." covers "has been" and "that's been", and both spellings of
   # cancelled are listed, from wordings the lists missed.
   move: ["i've moved", "i have moved", "been moved", "is now on", "i've rescheduled", "i have rescheduled", "been rescheduled"]
   cancel: ["i've cancelled", "i have cancelled", "been cancelled", "is cancelled", "that's cancelled", "it's cancelled", "i've canceled", "i have canceled", "been canceled", "is canceled", "that's canceled", "it's canceled"]

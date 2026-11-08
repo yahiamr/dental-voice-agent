@@ -1,4 +1,4 @@
-"""Tests for action validation. Stage: 1 and 4.
+"""Tests for action validation. Stage: 1 and 3.
 
 What this file is:
     Proves each business rule and the order the checks run in.
@@ -156,7 +156,7 @@ def test_a_new_patient_who_cancelled_their_first_visit_can_book_one_again(calend
     assert check(action, context, calendar, clinic) is None
 
 
-# Stage 4: move and cancel. Lucía's seeded check-up is at least 3 days ahead, so it is outside
+# Stage 3: move and cancel. Lucía's seeded check-up is at least 3 days ahead, so it is outside
 # the 24-hour notice period at TEST_NOW. Tests that need it inside move the clock instead.
 
 

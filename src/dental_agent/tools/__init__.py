@@ -1,4 +1,4 @@
-"""The tools the model can call. Stage: 1, 4 and 5.
+"""The tools the model can call. Stage: 1, 3 and 5.
 
 What this file is:
     The registry of tools. Unlike the other __init__.py files, this one holds code.

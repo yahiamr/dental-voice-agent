@@ -1,4 +1,4 @@
-"""Checks an action is allowed. Stage: 1 and 4.
+"""Checks an action is allowed. Stage: 1 and 3.
 
 What this file is:
     The business rules for a booking, move or cancel.

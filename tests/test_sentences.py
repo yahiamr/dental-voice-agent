@@ -1,4 +1,4 @@
-"""Tests for the fixed sentences. Stage: 1 and 4.
+"""Tests for the fixed sentences. Stage: 1 and 3.
 
 What this file is:
     Proves each template gives the right sentence.
@@ -58,7 +58,7 @@ def test_closing_text_when_the_calendar_could_not_be_read():
     )
 
 
-# Stage 4: a move or cancel says the patient's name too, so the caller hears who it is for.
+# Stage 3: a move or cancel says the patient's name too, so the caller hears who it is for.
 LATER = "Thursday 19 November at 16:00"
 
 

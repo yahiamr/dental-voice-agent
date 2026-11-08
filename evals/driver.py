@@ -1,4 +1,4 @@
-"""A Speech object that plays the caller. Stage: 3.
+"""A Speech object that plays the caller. Stage: 4.
 
 What this file is:
     Feeds scripted caller lines into the normal session loop.

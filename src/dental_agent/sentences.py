@@ -1,4 +1,4 @@
-"""Fixed sentences for actions and call status. Stage: 1 and 4.
+"""Fixed sentences for actions and call status. Stage: 1 and 3.
 
 What this file is:
     The only place that writes sentences stating a successful action or the call's status.

@@ -1,4 +1,4 @@
-"""Tools that stage an action. Stage: 1 and 4.
+"""Tools that stage an action. Stage: 1 and 3.
 
 What this file is:
     The tools the model calls when the caller wants a change. They do not make the change.

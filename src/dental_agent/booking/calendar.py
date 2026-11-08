@@ -1,4 +1,4 @@
-"""All calendar reads and writes. Stage: 1 and 4.
+"""All calendar reads and writes. Stage: 1 and 3.
 
 What this file is:
     The only code that touches the calendar database.

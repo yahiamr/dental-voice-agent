@@ -1,4 +1,4 @@
-"""Builds what the model sees. Stage: 1 and 4.
+"""Builds what the model sees. Stage: 1 and 3.
 
 What this file is:
     Assembles the messages for each model call.

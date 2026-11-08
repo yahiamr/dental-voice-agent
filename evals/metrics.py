@@ -1,4 +1,4 @@
-"""One formula per metric. Stage: 3 and 5.
+"""One formula per metric. Stage: 4 and 5.
 
 What this file is:
     Turns stored runs into the numbers reported in the README.

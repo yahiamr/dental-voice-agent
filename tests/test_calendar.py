@@ -1,4 +1,4 @@
-"""Tests for the calendar. Stage: 1 and 4.
+"""Tests for the calendar. Stage: 1 and 3.
 
 What this file is:
     Proves the database protects the bookings.
@@ -313,7 +313,7 @@ def test_an_existing_patient_stays_existing_with_no_appointments(calendar):
     assert calendar.patient_status(KNOWN_PHONE) == "existing"
 
 
-# Stage 4: move and cancel.
+# Stage 3: move and cancel.
 
 
 def lucia_appointment(calendar):

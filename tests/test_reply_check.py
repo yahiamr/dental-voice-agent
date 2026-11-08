@@ -115,7 +115,7 @@ def test_a_move_or_cancel_claim_passes_with_its_own_record(kind, text, clinic):
     assert not run(text, clinic, actions=[action(kind)]).replaced
 
 
-# Wordings a live model uses, found missing from the phrase lists in the Stage 4 review. With
+# Wordings a live model uses, found missing from the phrase lists in the Stage 3 review. With
 # the checker off or failing, the phrases are the only defence against these false claims.
 @pytest.mark.parametrize(
     "text",

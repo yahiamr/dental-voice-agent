@@ -1,4 +1,4 @@
-"""Loads clinic.yaml. Stage: 1 and 4.
+"""Loads clinic.yaml. Stage: 1 and 3.
 
 What this file is:
     Reads data/clinic.yaml into a typed Clinic object at startup.

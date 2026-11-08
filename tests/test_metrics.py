@@ -1,4 +1,4 @@
-"""Tests for the metrics. Stage: 3.
+"""Tests for the metrics. Stage: 4.
 
 What this file is:
     Proves each metric formula.
