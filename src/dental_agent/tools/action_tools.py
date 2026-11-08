@@ -10,8 +10,9 @@ How to understand it:
     Each one calls validate_action and returns a PendingAction as an update. After that, code
     takes over: ask_confirmation speaks it, and write_to_calendar writes it only after a yes on
     the next turn.
-    Only one pending action exists at a time. Until Stage 4, the reschedule and cancel tools
-    return unsupported_request.
+    Only one pending action exists at a time. A move or cancel names its appointment by the
+    per-call ID that lookup_appointment gave, and a move names its new slot by an offer ID from
+    find_slots. An ID the model made up finds nothing, and the action is refused.
 
 Uses:
     guards/validate.py, state.py, models.py
@@ -47,7 +48,6 @@ def prepare_booking(args: PrepareBookingInput, state: CallState, deps: GraphDeps
         offer=offer,
         # This adds "in addition to your existing appointment" to the confirmation question.
         same_service_booked=deps.calendar.has_active_service(state.caller_phone, offer.service),
-        include_name=True,  # A booking confirmation question always says the name.
     )
 
     # Apply the same checks that write_to_calendar applies again on the next turn.
@@ -67,10 +67,34 @@ def prepare_booking(args: PrepareBookingInput, state: CallState, deps: GraphDeps
 def prepare_reschedule(
     args: PrepareRescheduleInput, state: CallState, deps: GraphDeps
 ) -> ToolOutcome:
-    """Not available until Stage 4, so the agent says the clinic line."""
-    return failure(ErrorCode.UNSUPPORTED_REQUEST, deps.clinic)
+    """Stage moving a found appointment to an offered slot. Nothing is written here."""
+    appointment = state.found(args.appointment_id)
+    offer = next((item for item in state.offers if item.slot_id == args.slot_id), None)
+    if appointment is not None and offer is None:
+        return failure(ErrorCode.SLOT_NOT_OFFERED, deps.clinic)
+    action = PendingAction(
+        action_id=str(uuid4()), kind="move", appointment=appointment, offer=offer
+    )
+    return _stage(action, state, deps)
 
 
 def prepare_cancel(args: PrepareCancelInput, state: CallState, deps: GraphDeps) -> ToolOutcome:
-    """Not available until Stage 4, so the agent says the clinic line."""
-    return failure(ErrorCode.UNSUPPORTED_REQUEST, deps.clinic)
+    """Stage cancelling a found appointment. Nothing is written here."""
+    appointment = state.found(args.appointment_id)
+    action = PendingAction(action_id=str(uuid4()), kind="cancel", appointment=appointment)
+    return _stage(action, state, deps)
+
+
+def _stage(action: PendingAction, state: CallState, deps: GraphDeps) -> ToolOutcome:
+    """Check a move or cancel and return it as the pending action, or return the refusal.
+
+    An appointment that was never found reaches validate_action as None, which refuses it with
+    not_owner.
+    """
+    error = validate_action(
+        action, state.to_context(), deps.calendar, deps.clock.now(), deps.clinic
+    )
+    if error:
+        return failure(error, deps.clinic)
+    result = ToolResult(ok=True, data={"action_id": action.action_id})
+    return ToolOutcome(result=result, updates={"pending_action": action})

@@ -20,7 +20,7 @@ from datetime import date, timedelta
 import pytest
 from tests.conftest import PAST_NEW, TEST_NOW, add_past_first_visit
 
-from dental_agent.booking.calendar import Calendar, SlotTaken
+from dental_agent.booking.calendar import Calendar, NotActive, SlotTaken
 from dental_agent.booking.seed import seed
 from dental_agent.clock import MADRID, FixedClock
 from dental_agent.models import Offer, PendingAction
@@ -311,3 +311,132 @@ def test_an_existing_patient_stays_existing_with_no_appointments(calendar):
     set_status(calendar, KNOWN_PHONE, "cancelled")
     calendar.mark_attended(KNOWN_PHONE, TEST_NOW, "first_visit")
     assert calendar.patient_status(KNOWN_PHONE) == "existing"
+
+
+# Stage 4: move and cancel.
+
+
+def lucia_appointment(calendar):
+    """Return Lucía's one seeded check-up."""
+    return calendar.appointments_for(KNOWN_PHONE, 5)[0]
+
+
+def change(kind, appointment, slot=None, action_id="change-1"):
+    """Build a move or cancel waiting for a yes."""
+    offer = None
+    if slot is not None:
+        offer = Offer(
+            slot_id="s1", db_slot_id=slot.db_slot_id, service=appointment.service, spoken="later"
+        )
+    return PendingAction(action_id=action_id, kind=kind, appointment=appointment, offer=offer)
+
+
+def move(calendar, action, conversation_id="c-1"):
+    """Move with fixed text."""
+    return calendar.move(action, conversation_id, "later", "Moved.", TEST_NOW)
+
+
+def cancel(calendar, action, conversation_id="c-1"):
+    """Cancel with fixed text."""
+    return calendar.cancel(action, conversation_id, "a time", "Cancelled.", TEST_NOW)
+
+
+def test_a_move_changes_the_slot_and_frees_the_old_one(calendar):
+    appointment = lucia_appointment(calendar)
+    slot = free_slot(calendar)
+    record = move(calendar, change("move", appointment, slot))
+    assert record.kind == "move"
+    assert record.old_slot_id == appointment.db_slot_id
+    assert record.new_slot_id == slot.db_slot_id
+    assert record.appointment_id == appointment.db_id
+    moved = lucia_appointment(calendar)
+    assert moved.db_id == appointment.db_id  # The same row, so the record keeps its history.
+    assert moved.db_slot_id == slot.db_slot_id
+    assert calendar.slot_is_free(appointment.db_slot_id)
+
+
+def test_a_move_to_a_taken_slot_raises_and_changes_nothing(calendar):
+    appointment = lucia_appointment(calendar)
+    slot = free_slot(calendar)
+    book(calendar, pending(slot))
+    with pytest.raises(SlotTaken):
+        move(calendar, change("move", appointment, slot))
+    assert lucia_appointment(calendar).db_slot_id == appointment.db_slot_id
+    assert calendar.get_action("change-1") is None
+
+
+def test_a_cancel_frees_the_slot_and_keeps_the_row(calendar):
+    appointment = lucia_appointment(calendar)
+    record = cancel(calendar, change("cancel", appointment))
+    assert record.kind == "cancel"
+    assert record.old_slot_id == appointment.db_slot_id
+    assert record.new_slot_id is None
+    assert calendar.appointments_for(KNOWN_PHONE, 5) == []
+    assert calendar.slot_is_free(appointment.db_slot_id)
+    with calendar._connect() as connection:
+        row = connection.execute(
+            "SELECT status FROM appointments WHERE id = ?", (appointment.db_id,)
+        ).fetchone()
+    assert row["status"] == "cancelled"
+
+
+def test_a_cancelled_slot_can_be_booked_again(calendar):
+    appointment = lucia_appointment(calendar)
+    cancel(calendar, change("cancel", appointment))
+    freed = calendar.get_slot(appointment.db_slot_id)
+    book(calendar, pending(freed, "action-2"))
+    assert not calendar.slot_is_free(appointment.db_slot_id)
+
+
+def test_a_repeated_move_or_cancel_returns_the_first_result(calendar):
+    appointment = lucia_appointment(calendar)
+    first = cancel(calendar, change("cancel", appointment))
+    assert cancel(calendar, change("cancel", appointment)) == first
+    other = calendar.appointments_for(RAUL, 5)[0]
+    action = change("move", other, free_slot(calendar), action_id="change-2")
+    assert move(calendar, action) == move(calendar, action)
+
+
+def test_move_and_cancel_raise_not_active_for_a_cancelled_appointment(calendar):
+    appointment = lucia_appointment(calendar)
+    set_status(calendar, KNOWN_PHONE, "cancelled")
+    with pytest.raises(NotActive):
+        cancel(calendar, change("cancel", appointment))
+    with pytest.raises(NotActive):
+        move(calendar, change("move", appointment, free_slot(calendar), action_id="change-2"))
+    assert calendar.get_action("change-1") is None
+    assert calendar.get_action("change-2") is None
+
+
+def test_move_and_cancel_raise_not_active_when_the_appointment_moved_since_lookup(calendar):
+    # The action holds the slot the call last saw. A row moved since then is left alone.
+    appointment = lucia_appointment(calendar)
+    move(calendar, change("move", appointment, free_slot(calendar)))
+    moved_to = lucia_appointment(calendar).db_slot_id
+    with pytest.raises(NotActive):
+        cancel(calendar, change("cancel", appointment, action_id="change-2"))
+    with pytest.raises(NotActive):
+        move(calendar, change("move", appointment, free_slot(calendar), action_id="change-3"))
+    assert lucia_appointment(calendar).db_slot_id == moved_to
+    assert calendar.get_action("change-2") is None
+    assert calendar.get_action("change-3") is None
+
+
+def test_appointments_for_can_leave_out_past_appointments(calendar):
+    add_past_first_visit(calendar)
+    assert len(calendar.appointments_for(PAST_NEW, 5)) == 1
+    assert calendar.appointments_for(PAST_NEW, 5, after=TEST_NOW) == []
+
+
+def test_changes_are_listed_for_their_call(calendar):
+    appointment = lucia_appointment(calendar)
+    cancel(calendar, change("cancel", appointment), conversation_id="c-9")
+    assert [item.kind for item in calendar.actions_for_call("c-9")] == ["cancel"]
+
+
+def test_get_appointment_reads_the_row_in_any_status(calendar):
+    appointment = lucia_appointment(calendar)
+    assert calendar.get_appointment(appointment.db_id) == appointment
+    set_status(calendar, KNOWN_PHONE, "cancelled")
+    assert calendar.get_appointment(appointment.db_id).status == "cancelled"
+    assert calendar.get_appointment(999999) is None

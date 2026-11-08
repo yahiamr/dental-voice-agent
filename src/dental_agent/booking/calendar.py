@@ -6,8 +6,8 @@ What this file is:
 What it contains:
     - Calendar(path), which opens the file and applies the schema.
     - Reads: free_slots, get_slot, slot_is_free, patient_name, patient_status, has_patient,
-      patient_count,
-      sample_patients, appointments_for, has_active_service, get_action, actions_for_call.
+      patient_count, sample_patients, appointments_for, get_appointment, has_active_service,
+      get_action, actions_for_call.
     - Writes: book, move, cancel, mark_attended, seed_rows.
     - Errors: SlotTaken, NotActive.
 
@@ -47,6 +47,11 @@ class CalendarError(Exception):
 
 class SlotTaken(CalendarError):
     """Another appointment already holds this slot."""
+
+
+class NotActive(CalendarError):
+    """The appointment to move or cancel is no longer active, or no longer in the slot the call
+    last saw. write_to_calendar maps it to not_owner."""
 
 
 class Calendar:
@@ -192,11 +197,17 @@ class Calendar:
             ).fetchall()
         return [(row["phone"], row["name"]) for row in rows]
 
-    def appointments_for(self, phone: str, limit: int) -> list[Appointment]:
+    def appointments_for(
+        self, phone: str, limit: int, after: datetime | None = None
+    ) -> list[Appointment]:
         """Return this number's active appointments, earliest first.
 
-        The result has no per-call IDs or spoken text. The lookup tool adds those.
+        With after, only appointments starting after that moment: one that has already started
+        cannot be moved or cancelled, so the call never lists it as one to change. The result
+        has no per-call IDs or spoken text. The lookup tool adds those.
         """
+        # With no moment given, every active appointment is listed.
+        after_at = after.isoformat() if after else ""
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -206,21 +217,28 @@ class Calendar:
                 JOIN patients ON patients.id = appointments.patient_id
                 JOIN slots ON slots.id = appointments.slot_id
                 WHERE patients.phone = ? AND appointments.status = 'active'
+                  AND slots.start_at > ?
                 ORDER BY slots.start_at LIMIT ?
                 """,
-                (phone, limit),
+                (phone, after_at, limit),
             ).fetchall()
-        return [
-            Appointment(
-                db_id=row["db_id"],
-                patient_name=row["name"],
-                service=row["service"],
-                db_slot_id=row["slot_id"],
-                start_at=datetime.fromisoformat(row["start_at"]),
-                status=row["status"],
-            )
-            for row in rows
-        ]
+        return [_appointment(row) for row in rows]
+
+    def get_appointment(self, db_id: int) -> Appointment | None:
+        """Return one appointment in any status, or None if no row has this ID."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT appointments.id AS db_id, appointments.service, appointments.slot_id,
+                       appointments.status, patients.name, slots.start_at
+                FROM appointments
+                JOIN patients ON patients.id = appointments.patient_id
+                JOIN slots ON slots.id = appointments.slot_id
+                WHERE appointments.id = ?
+                """,
+                (db_id,),
+            ).fetchone()
+        return _appointment(row) if row else None
 
     def has_active_service(self, phone: str, service: str) -> bool:
         """Return True if this number already has that service booked."""
@@ -305,6 +323,126 @@ class Calendar:
             created_at=created_at,
         )
 
+    def move(
+        self,
+        action: PendingAction,
+        conversation_id: str,
+        spoken: str,
+        result_text: str,
+        now: datetime,
+    ) -> ActionRecord:
+        """Move an appointment to the offered slot. The update and its action row land together.
+
+        It is one UPDATE of slot_id on the same row, so a failure leaves the old appointment as
+        it was. Raises NotActive if the appointment is no longer active or has moved since the
+        call looked it up, SlotTaken if the new slot has gone, and CalendarError on any other
+        database problem.
+        """
+        existing = self.get_action(action.action_id)
+        if existing:
+            return existing
+        appointment = action.appointment
+        old_slot_id = appointment.db_slot_id
+        new_slot_id = action.offer.db_slot_id
+        return self._change(
+            action,
+            conversation_id,
+            "UPDATE appointments SET slot_id = ? "
+            "WHERE id = ? AND slot_id = ? AND status = 'active'",
+            (new_slot_id, appointment.db_id, old_slot_id),
+            old_slot_id,
+            new_slot_id,
+            spoken,
+            result_text,
+            now,
+        )
+
+    def cancel(
+        self,
+        action: PendingAction,
+        conversation_id: str,
+        spoken: str,
+        result_text: str,
+        now: datetime,
+    ) -> ActionRecord:
+        """Cancel an appointment. The row stays, marked cancelled, and its slot is free again.
+
+        Raises NotActive if the appointment is no longer active or has moved since the call
+        looked it up, and CalendarError on any other database problem.
+        """
+        existing = self.get_action(action.action_id)
+        if existing:
+            return existing
+        appointment = action.appointment
+        return self._change(
+            action,
+            conversation_id,
+            "UPDATE appointments SET status = 'cancelled' "
+            "WHERE id = ? AND slot_id = ? AND status = 'active'",
+            (appointment.db_id, appointment.db_slot_id),
+            appointment.db_slot_id,
+            None,
+            spoken,
+            result_text,
+            now,
+        )
+
+    def _change(
+        self,
+        action: PendingAction,
+        conversation_id: str,
+        update_sql: str,
+        update_values: tuple,
+        old_slot_id: int,
+        new_slot_id: int | None,
+        spoken: str,
+        result_text: str,
+        now: datetime,
+    ) -> ActionRecord:
+        """Run one update on an active appointment and add its action row, in one transaction."""
+        created_at = now.isoformat()
+        appointment_id = action.appointment.db_id
+        try:
+            with self._connect() as connection:
+                # The update matches only an active row still in the slot the call saw, so a
+                # cancelled or moved row changes nothing, and the caller's yes is not misused.
+                if connection.execute(update_sql, update_values).rowcount == 0:
+                    raise NotActive(str(appointment_id))
+                connection.execute(
+                    "INSERT INTO actions (id, conversation_id, kind, appointment_id, old_slot_id, "
+                    "new_slot_id, spoken, result_text, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        action.action_id,
+                        conversation_id,
+                        action.kind,
+                        appointment_id,
+                        old_slot_id,
+                        new_slot_id,
+                        spoken,
+                        result_text,
+                        created_at,
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            # Only the one_active_per_slot index means the new slot is taken.
+            if "appointments.slot_id" in str(error):
+                raise SlotTaken(str(new_slot_id)) from error
+            raise CalendarError(str(error)) from error
+        except sqlite3.Error as error:
+            raise CalendarError(str(error)) from error
+        return ActionRecord(
+            action_id=action.action_id,
+            conversation_id=conversation_id,
+            kind=action.kind,
+            appointment_id=appointment_id,
+            old_slot_id=old_slot_id,
+            new_slot_id=new_slot_id,
+            spoken=spoken,
+            result_text=result_text,
+            created_at=created_at,
+        )
+
     def get_action(self, action_id: str) -> ActionRecord | None:
         """Return the stored record for this action ID, or None if it was never written."""
         with self._connect() as connection:
@@ -371,6 +509,18 @@ def _slot(row: sqlite3.Row) -> Slot:
         db_slot_id=row["id"],
         start_at=datetime.fromisoformat(row["start_at"]),
         end_at=datetime.fromisoformat(row["end_at"]),
+    )
+
+
+def _appointment(row: sqlite3.Row) -> Appointment:
+    """Turn an appointments row, joined to its patient and slot, into an Appointment."""
+    return Appointment(
+        db_id=row["db_id"],
+        patient_name=row["name"],
+        service=row["service"],
+        db_slot_id=row["slot_id"],
+        start_at=datetime.fromisoformat(row["start_at"]),
+        status=row["status"],
     )
 
 

@@ -1,4 +1,4 @@
-"""Checks the model's text before it is spoken. Stage: 1.
+"""Checks the model's text before it is spoken. Stage: 1 and 4.
 
 What this file is:
     The last check on anything the model wrote.
@@ -19,8 +19,10 @@ How to understand it:
     replace the reply with the medical line if it has dosing words, check claims, then trim to
     3 sentences. A claim is a phrase such as "you're booked", unless an offer that opens its
     clause leads straight to it, as in "shall I get you all set?". The reply must also contain
-    the spoken text of a real action of that kind or a found appointment. If it does not, the
-    reply becomes status_text. That is why spoken strings must be exact.
+    the spoken text of a real action of that kind. A booking claim may name a found appointment
+    instead, as the caller already has it. A move or cancel claim may not: a false one names the
+    appointment's own time, so only a real move or cancel proves it. If the proof is missing,
+    the reply becomes status_text. That is why spoken strings must be exact.
 
     A caller given a wrong number cannot reach the clinic, so phone numbers are fixed by code.
     fix_phone_numbers finds runs of 6 or more digits, which may be split by spaces, hyphens or
@@ -41,7 +43,8 @@ How to understand it:
     corrected, check_reply decides in this order:
     1. Advice: a dosing word or model_advice gives the medical line. The reason is dosing if a
        word matched, otherwise model_advice.
-    2. Claim phrases, kind by kind, each needing proof of the same kind. The reason is claim.
+    2. Claim phrases, kind by kind, each needing proof of the same kind, or a found appointment
+       for a booking claim. The reason is claim.
     3. model_claim with no claim phrase needs a real record of any kind: the spoken time of any
        action in this call, or of a found appointment, in the reply. Otherwise the reply becomes
        the status line, with the reason model_claim. A checker claim has no kind, so any record
@@ -132,8 +135,12 @@ def check_reply(
     results = [item.result_text for item in actions]
     found_spoken = [item.spoken.lower() for item in found_appointments if item.spoken]
     for kind in matched:
-        # The reply must contain the exact time of a same-kind action or a found appointment.
-        proof = [item.spoken.lower() for item in actions if item.kind == kind] + found_spoken
+        # The reply must contain the exact time of a same-kind action. A booking claim may name
+        # an appointment the caller already has. A false move or cancel names the found
+        # appointment's own time, so for those only a real record is proof.
+        proof = [item.spoken.lower() for item in actions if item.kind == kind]
+        if kind == "book":
+            proof += found_spoken
         if not any(spoken in lowered for spoken in proof):
             return ReplyDecision(text=status_text(results), replaced=True, reason="claim")
 

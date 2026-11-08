@@ -15,7 +15,9 @@ Used by:
     pytest
 """
 
-from tests.conftest import TEST_NOW
+from datetime import timedelta
+
+from tests.conftest import PAST_NEW, TEST_NOW, add_past_first_visit
 
 from dental_agent.models import Details, ErrorCode, ToolCall, ToolExit
 from dental_agent.state import CallState, apply_updates
@@ -110,7 +112,20 @@ def test_lookup_returns_this_callers_appointments(deps):
 
 
 def test_lookup_with_no_appointment_returns_no_appointment(state, deps):
-    assert run("lookup_appointment", state, deps).result.error_code is ErrorCode.NO_APPOINTMENT
+    outcome = run("lookup_appointment", state, deps)
+    assert outcome.result.error_code is ErrorCode.NO_APPOINTMENT
+    # No tool searches by name or another number, so the model must not offer to.
+    assert "cannot search" in outcome.result.message
+    # The lookup leaves out appointments that have started, so the message covers that case.
+    assert "already started" in outcome.result.message
+
+
+def test_lookup_leaves_out_past_appointments(deps):
+    # A past appointment cannot be moved or cancelled, so it is not listed as one to change.
+    add_past_first_visit(deps.graph.calendar)
+    state = CallState(conversation_id="c", caller_phone=PAST_NEW)
+    outcome = run("lookup_appointment", state, deps)
+    assert outcome.result.error_code is ErrorCode.NO_APPOINTMENT
 
 
 def test_lookup_is_capped_at_five(deps):
@@ -199,18 +214,6 @@ def test_prepare_booking_notes_a_service_already_booked(deps):
     ready = apply_updates(state, run("find_slots", state, deps, args).updates)
     outcome = run("prepare_booking", ready, deps, {"slot_id": "s1"})
     assert outcome.updates["pending_action"].same_service_booked
-
-
-def test_reschedule_is_unsupported_for_now(state, deps):
-    args = {"appointment_id": "a1", "slot_id": "s1"}
-    outcome = run("prepare_reschedule", state, deps, args)
-    assert outcome.result.error_code is ErrorCode.UNSUPPORTED_REQUEST
-    assert outcome.result.message == deps.graph.clinic.line("unsupported")
-
-
-def test_cancel_is_unsupported_for_now(state, deps):
-    outcome = run("prepare_cancel", state, deps, {"appointment_id": "a1"})
-    assert outcome.result.error_code is ErrorCode.UNSUPPORTED_REQUEST
 
 
 def test_flag_urgent_records_the_level(state, deps):
@@ -362,3 +365,122 @@ def test_find_slots_refuses_a_second_first_visit_for_a_new_patient(deps):
     )
     outcome = run("find_slots", state, deps, WINDOW)
     assert outcome.result.error_code is ErrorCode.FIRST_VISIT_BOOKED
+
+
+# Stage 4: reschedule and cancel.
+NORA = "+34600000007"  # New, with a first visit booked ahead.
+
+
+def looked_up(state, deps):
+    """Return state after lookup_appointment found the caller's appointments."""
+    return apply_updates(state, run("lookup_appointment", state, deps).updates)
+
+
+def searched_for_move(state, deps, appointment_id="a1"):
+    """Return state after a slot search for moving that appointment."""
+    args = WINDOW | {"service": "check_up", "appointment_id": appointment_id}
+    return apply_updates(state, run("find_slots", state, deps, args).updates)
+
+
+def add_appointment_soon(calendar, phone=KNOWN, hours=6):
+    """Give the caller a check-up this many hours after TEST_NOW, inside the notice period."""
+    start = TEST_NOW + timedelta(hours=hours)
+    with calendar._connect() as connection:
+        patient = connection.execute("SELECT id FROM patients WHERE phone = ?", (phone,))
+        patient_id = patient.fetchone()["id"]
+        # The seed may already hold a free slot at that time, so reuse it.
+        connection.execute(
+            "INSERT OR IGNORE INTO slots (start_at, end_at) VALUES (?, ?)",
+            (start.isoformat(), (start + timedelta(minutes=30)).isoformat()),
+        )
+        slot = connection.execute(
+            "SELECT id FROM slots WHERE start_at = ?", (start.isoformat(),)
+        ).fetchone()["id"]
+        connection.execute(
+            "INSERT INTO appointments (patient_id, slot_id, service, status, created_at) "
+            "VALUES (?, ?, 'check_up', 'active', 'now')",
+            (patient_id, slot),
+        )
+
+
+def test_prepare_reschedule_stages_a_move_and_writes_nothing(deps):
+    ready = searched_for_move(looked_up(known_caller(), deps), deps)
+    old = ready.found_appointments[0]
+    args = {"appointment_id": "a1", "slot_id": ready.offers[0].slot_id}
+    outcome = run("prepare_reschedule", ready, deps, args)
+    assert outcome.result.ok
+    action = outcome.updates["pending_action"]
+    assert action.kind == "move"
+    assert action.appointment.db_id == old.db_id
+    assert action.offer.slot_id == ready.offers[0].slot_id
+    calendar = deps.graph.calendar
+    assert calendar.get_appointment(old.db_id).db_slot_id == old.db_slot_id
+    assert calendar.slot_is_free(ready.offers[0].db_slot_id)
+
+
+def test_prepare_cancel_stages_a_cancel_and_writes_nothing(deps):
+    ready = looked_up(known_caller(), deps)
+    outcome = run("prepare_cancel", ready, deps, {"appointment_id": "a1"})
+    assert outcome.result.ok
+    action = outcome.updates["pending_action"]
+    assert action.kind == "cancel"
+    assert action.offer is None
+    assert deps.graph.calendar.get_appointment(action.appointment.db_id).status == "active"
+
+
+def test_a_change_before_lookup_is_refused(deps):
+    # The model must look the appointment up first, so an invented ID finds nothing.
+    outcome = run("prepare_cancel", known_caller(), deps, {"appointment_id": "a1"})
+    assert outcome.result.error_code is ErrorCode.NOT_OWNER
+    assert "pending_action" not in outcome.updates
+
+
+def test_prepare_reschedule_rejects_a_slot_that_was_not_offered(deps):
+    ready = looked_up(known_caller(), deps)
+    args = {"appointment_id": "a1", "slot_id": "s99"}
+    outcome = run("prepare_reschedule", ready, deps, args)
+    assert outcome.result.error_code is ErrorCode.SLOT_NOT_OFFERED
+
+
+def test_a_cancel_inside_the_notice_period_is_refused(deps):
+    add_appointment_soon(deps.graph.calendar)
+    ready = looked_up(known_caller(), deps)
+    soon = ready.found_appointments[0]  # Earliest first, so the one in 6 hours.
+    outcome = run("prepare_cancel", ready, deps, {"appointment_id": soon.appointment_id})
+    assert outcome.result.error_code is ErrorCode.POLICY_BLOCKED
+    assert "notice period" in outcome.result.message
+
+
+def test_find_slots_for_a_move_uses_the_appointments_service(deps):
+    # A slot found to move a check-up is a check-up slot, whatever service the model sent.
+    state = looked_up(known_caller(), deps)
+    args = WINDOW | {"service": "cleaning", "appointment_id": "a1"}
+    outcome = run("find_slots", state, deps, args)
+    assert outcome.result.ok
+    assert {offer.service for offer in outcome.updates["offers"]} == {"check_up"}
+
+
+def test_find_slots_lets_a_new_patient_move_their_first_visit(deps):
+    # Without appointment_id this search is refused, because a first visit is already booked.
+    details = Details(name="Nora Blanco", patient_type="new")
+    state = CallState(conversation_id="c", caller_phone=NORA, patient_record=True, details=details)
+    ready = looked_up(state, deps)
+    outcome = run("find_slots", ready, deps, WINDOW | {"appointment_id": "a1"})
+    assert outcome.result.ok
+    assert {offer.service for offer in outcome.updates["offers"]} == {"first_visit"}
+
+
+def test_find_slots_for_an_unknown_appointment_is_refused(deps):
+    outcome = run("find_slots", known_caller(), deps, WINDOW | {"appointment_id": "a7"})
+    assert outcome.result.error_code is ErrorCode.NOT_OWNER
+
+
+def test_find_slots_for_a_move_inside_the_notice_period_is_refused(deps):
+    # Times are never offered for a move that prepare_reschedule would refuse.
+    add_appointment_soon(deps.graph.calendar)
+    ready = looked_up(known_caller(), deps)
+    soon = ready.found_appointments[0]
+    args = WINDOW | {"service": "check_up", "appointment_id": soon.appointment_id}
+    outcome = run("find_slots", ready, deps, args)
+    assert outcome.result.error_code is ErrorCode.POLICY_BLOCKED
+    assert "offers" not in outcome.updates

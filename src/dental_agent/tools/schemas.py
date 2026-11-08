@@ -1,10 +1,11 @@
-"""Input models for each tool. Stage: 1.
+"""Input models for each tool. Stage: 1 and 4.
 
 What this file is:
     A Pydantic class per tool, describing the arguments the model must send.
 
 What it contains:
     - An input model for each of the 10 tools under Tool Contracts.
+    - FindSlotsInput.appointment_id, set when the search is for moving a found appointment.
 
 How to understand it:
     These classes produce the tool schemas sent to the model, and they check what comes back.
@@ -37,7 +38,11 @@ ERROR_MESSAGES = {
         "Those dates are not bookable. Ask for dates within the booking window."
     ),
     ErrorCode.NO_SLOTS: "Nothing is free then. Offer to search later dates.",
-    ErrorCode.NO_APPOINTMENT: "This number has no active appointment.",
+    ErrorCode.NO_APPOINTMENT: (
+        "This number has no appointment still to come. One that has already started cannot be "
+        "changed here. You cannot search by name or by another number, so do not offer to. Say "
+        "they can call again from the number they booked with, or call the clinic."
+    ),
     ErrorCode.UNKNOWN_TOPIC: "Use services, prices, hours or rules.",
     ErrorCode.SLOT_NOT_OFFERED: "That slot is not on offer for this service. Search again.",
     ErrorCode.SLOT_TAKEN: "That slot has gone. Search again.",
@@ -98,6 +103,10 @@ class FindSlotsInput(BaseModel):
     date_to: date
     weekdays: list[Literal["mon", "tue", "wed", "thu", "fri"]] | None = None
     time_window: Literal["morning", "afternoon", "any"] = "any"
+    appointment_id: str | None = Field(
+        default=None,
+        description="Set when searching for a new time for this found appointment.",
+    )
 
 
 class LookupAppointmentInput(BaseModel):

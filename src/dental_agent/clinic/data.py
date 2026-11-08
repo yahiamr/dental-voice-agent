@@ -1,4 +1,4 @@
-"""Loads clinic.yaml. Stage: 1.
+"""Loads clinic.yaml. Stage: 1 and 4.
 
 What this file is:
     Reads data/clinic.yaml into a typed Clinic object at startup.
@@ -6,6 +6,7 @@ What this file is:
 What it contains:
     - Clinic, with hours, services, rules, lines, phrases and word lists.
     - Clinic.line(key, **values), which fills placeholders such as {clinic_line}.
+    - Clinic.service_name(service_id), the spoken name of a service, even one no longer offered.
 
 How to understand it:
     Prices and hours live in one file, so the tools answer from data and the model never has to
@@ -116,6 +117,15 @@ class Clinic(BaseModel):
     def service(self, service_id: str) -> Service | None:
         """Return the service with this ID, or None if the clinic does not offer it."""
         return next((item for item in self.services if item.id == service_id), None)
+
+    def service_name(self, service_id: str) -> str:
+        """Return the service's name. An ID no longer in clinic.yaml is spoken as its words.
+
+        A move or cancel takes its service from the calendar row, which may predate a change to
+        clinic.yaml, so the name must never be missing.
+        """
+        service = self.service(service_id)
+        return service.name if service else service_id.replace("_", " ")
 
     def line(self, key: str, **values: object) -> str:
         """Return a fixed or refusal line with its placeholders filled in."""

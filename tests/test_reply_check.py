@@ -85,7 +85,65 @@ def test_a_claim_about_a_second_booking_is_replaced(clinic):
 
 
 def test_a_true_statement_about_an_existing_appointment_passes(clinic):
-    text = f"Your check-up is now on {SPOKEN}."
+    text = f"You're all set for your check-up on {SPOKEN}."
+    assert not run(text, clinic, found=[appointment()]).replaced
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"I've cancelled your check-up on {SPOKEN}.",
+        f"I've moved your check-up from {SPOKEN} to {OTHER}.",
+        f"Your check-up is now on {SPOKEN}.",
+    ],
+)
+def test_a_move_or_cancel_claim_is_not_proved_by_a_found_appointment(text, clinic):
+    # A false cancel or move names the appointment's own time, so only a real record proves it.
+    decision = run(text, clinic, found=[appointment()])
+    assert decision.replaced
+    assert decision.reason == "claim"
+
+
+@pytest.mark.parametrize(
+    ("kind", "text"),
+    [
+        ("cancel", f"Your check-up on {SPOKEN} is cancelled."),
+        ("move", f"Your check-up is now on {SPOKEN}."),
+    ],
+)
+def test_a_move_or_cancel_claim_passes_with_its_own_record(kind, text, clinic):
+    assert not run(text, clinic, actions=[action(kind)]).replaced
+
+
+# Wordings a live model uses, found missing from the phrase lists in the Stage 4 review. With
+# the checker off or failing, the phrases are the only defence against these false claims.
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"That's cancelled: your check-up on {SPOKEN}.",
+        f"It's cancelled, so {SPOKEN} is free again.",
+        f"Your check-up on {SPOKEN} has been canceled.",
+        f"I've canceled your check-up on {SPOKEN}.",
+        f"I've rescheduled your check-up to {OTHER}.",
+        f"Your check-up has been rescheduled to {OTHER}.",
+        f"That's been moved to {OTHER}.",
+    ],
+)
+def test_common_move_and_cancel_wordings_are_claims(text, clinic):
+    decision = run(text, clinic, found=[appointment()])
+    assert decision.replaced
+    assert decision.reason == "claim"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"Your check-up on {SPOKEN} is inside the notice period, so I can't cancel it here.",
+        f"I can't move your check-up on {SPOKEN}, so please call the clinic.",
+        f"Would you like your check-up on {SPOKEN} rescheduled?",
+    ],
+)
+def test_refusals_and_offers_about_a_found_appointment_still_pass(text, clinic):
     assert not run(text, clinic, found=[appointment()]).replaced
 
 

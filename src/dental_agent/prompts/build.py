@@ -1,4 +1,4 @@
-"""Builds what the model sees. Stage: 1.
+"""Builds what the model sees. Stage: 1 and 4.
 
 What this file is:
     Assembles the messages for each model call.
@@ -18,6 +18,10 @@ How to understand it:
     Found appointments as well as under actions. It is marked "booked in this call", because a
     real voice call showed the model reading the two lines as a double booking.
 
+    An appointment inside the notice period is marked too. A notice refusal comes from a tool,
+    and tool results are dropped when a turn ends, so without the mark a real call showed the
+    model taking back a correct refusal on the next turn.
+
 Uses:
     state.py, models.py, clock.py
 
@@ -32,7 +36,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from dental_agent.clinic.data import Clinic
 from dental_agent.clock import Clock
-from dental_agent.models import ActionRecord
+from dental_agent.guards.validate import notice_blocks
+from dental_agent.models import ActionRecord, Appointment
 from dental_agent.state import CallState
 
 # The prompt sits next to this file, so it ships with the package.
@@ -45,6 +50,31 @@ DATE_LIST_DAYS = 14
 # How a found appointment changed in this call is marked, so it is not read as a second one.
 CHANGE_MARKS = {"book": "booked in this call", "move": "moved in this call",
                 "cancel": "cancelled in this call"}  # fmt: skip
+
+
+# Tool results are dropped when a turn ends, so a notice refusal must also live in the facts.
+NOTICE_MARK = (
+    "inside the {hours}-hour notice period, so it cannot be moved or cancelled on this line"
+)
+
+
+def _found_line(
+    item: Appointment,
+    changed: dict[int, str],
+    actions: list[ActionRecord],
+    clock: Clock,
+    clinic: Clinic,
+) -> str:
+    """Write one found appointment, with how this call changed it or why it cannot change.
+
+    changed maps an appointment's database ID to its change mark for this call.
+    """
+    line = f"- {item.appointment_id}: {item.service} for {item.patient_name} on {item.spoken}"
+    if item.db_id in changed:
+        return f"{line} ({changed[item.db_id]})"
+    if notice_blocks(item, actions, clock.now(), clinic):
+        return f"{line} ({NOTICE_MARK.format(hours=clinic.notice_hours)})"
+    return line
 
 
 def state_block(state: CallState, actions: list[ActionRecord], clock: Clock, clinic: Clinic) -> str:
@@ -86,12 +116,10 @@ def state_block(state: CallState, actions: list[ActionRecord], clock: Clock, cli
     if state.found_appointments:
         # A change made in this call is marked, because after a booking the caller's
         # appointments are reloaded and the new one would otherwise look like an old one.
-        changed = {action.appointment_id: CHANGE_MARKS[action.kind] for action in actions}
         lines.append("Found appointments:")
+        changed = {action.appointment_id: CHANGE_MARKS[action.kind] for action in actions}
         lines += [
-            f"- {item.appointment_id}: {item.service} for {item.patient_name} on {item.spoken}"
-            + (f" ({changed[item.db_id]})" if item.db_id in changed else "")
-            for item in state.found_appointments
+            _found_line(item, changed, actions, clock, clinic) for item in state.found_appointments
         ]
     else:
         lines.append("Found appointments: none")

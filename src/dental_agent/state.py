@@ -7,6 +7,7 @@ What it contains:
     - CallState: identity, caller details, offers, found appointments, the pending action, turn
       counters, the reply and the messages.
     - to_context(), which builds the ActionContext that validate_action needs.
+    - found(appointment_id), the found appointment with this per-call ID, or None.
     - Derived helpers such as missing_details().
 
 How to understand it:
@@ -102,6 +103,13 @@ class CallState(BaseModel):
             details=self.details,
             offers=self.offers,
             found_appointments=self.found_appointments,
+        )
+
+    def found(self, appointment_id: str) -> Appointment | None:
+        """Return the appointment lookup_appointment gave this ID, or None for an invented one."""
+        return next(
+            (item for item in self.found_appointments if item.appointment_id == appointment_id),
+            None,
         )
 
     def missing_details(self) -> list[str]:

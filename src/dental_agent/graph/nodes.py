@@ -1,4 +1,4 @@
-"""One small function per graph step. Stage: 1.
+"""One small function per graph step. Stage: 1, 2 and 4.
 
 What this file is:
     The steps of a turn. Each function reads state and returns only the fields it changes.
@@ -12,11 +12,14 @@ What it contains:
     - call_model, while a check is running, stops waiting for the model if the check raises
       the alarm first, so the 112 message is spoken at once.
     - check_confirmation: runs the yes rule. Anything but a yes deletes the pending action.
-    - write_to_calendar: validates again, writes to the calendar and builds the result sentence.
+    - write_to_calendar: validates again, writes the booking, move or cancel, and builds the
+      result sentence. A slot taken or an appointment no longer active at write time becomes the
+      matching reason line.
     - call_model: calls the model. This is the only step that does. If the final response is
       empty, it uses text the model sent with an earlier tool call this turn.
     - run_tools: runs one round of tool calls.
-    - ask_confirmation: builds the confirmation question from the stored action. A checked
+    - ask_confirmation: builds the confirmation question from the stored action, with the
+      patient's name. A move or cancel uses the name and service on the appointment. A checked
       sentence from the model may go before it. The checker is asked about that sentence only
       when there is one.
     - check_model_reply: checks the model's reply, with the checker's claim and advice flags.
@@ -57,7 +60,7 @@ from typing import Any
 
 from langchain_core.messages import ToolMessage
 
-from dental_agent.booking.calendar import SlotTaken
+from dental_agent.booking.calendar import NotActive, SlotTaken
 from dental_agent.checker import caller_questions, reply_questions
 from dental_agent.deps import GraphDeps, normalise_stop
 from dental_agent.guards.reply_check import check_lead_in, check_reply
@@ -213,6 +216,9 @@ def write_to_calendar(state: CallState, deps: GraphDeps) -> dict[str, Any]:
     except SlotTaken:
         # Another call won the slot in the moment between the check and the write.
         return _refuse(state, deps, action, ErrorCode.SLOT_TAKEN)
+    except NotActive:
+        # The appointment was cancelled elsewhere in the moment between the check and the write.
+        return _refuse(state, deps, action, ErrorCode.NOT_OWNER)
     except Exception as error:  # The write may or may not have happened, so check the record.
         logger.warning("Commit failed: %s", error)
         record = _find_record(deps, action.action_id)
@@ -333,13 +339,16 @@ def ask_confirmation(state: CallState, deps: GraphDeps) -> dict[str, Any]:
     comes last, so the caller's yes answers that question.
     """
     action = state.pending_action
-    service = deps.clinic.service(action.offer.service)
+    service_id = _action_service(action)
+    old = action.appointment
     question = confirmation_text(
         action.kind,
-        service.name,
-        action.offer.spoken,
-        name=state.details.name,
+        deps.clinic.service_name(service_id),
+        _action_spoken(action),
+        # A move or cancel says the name on the appointment, the patient on record.
+        name=old.patient_name if old else state.details.name,
         in_addition=action.same_service_booked,
+        old_spoken=old.spoken if action.kind == "move" else None,
     )
 
     # The response that holds the prepare call is the last one the model sent this turn.
@@ -352,7 +361,7 @@ def ask_confirmation(state: CallState, deps: GraphDeps) -> dict[str, Any]:
         claim, advice = _ask_reply_checker(state, deps, model_text, "ask_confirmation")
         decision = check_lead_in(
             model_text,
-            action.offer.service,
+            service_id,
             actions,
             state.found_appointments,
             deps.clinic,
@@ -471,19 +480,39 @@ def _past_deadline(state: CallState, deps: GraphDeps) -> bool:
 
 
 def _write(state: CallState, deps: GraphDeps, action: PendingAction) -> ActionRecord:
-    """Build the result sentence and write it with the booking, in one transaction."""
-    service = deps.clinic.service(action.offer.service)
-    sentence = result_text(action.kind, service.name, action.offer.spoken)
-    return deps.calendar.book(
+    """Build the result sentence and write it with the change, in one transaction."""
+    service_id = _action_service(action)
+    spoken = _action_spoken(action)
+    sentence = result_text(action.kind, deps.clinic.service_name(service_id), spoken)
+    now = deps.clock.now()
+    calendar = deps.calendar
+    if action.kind == "move":
+        return calendar.move(action, state.conversation_id, spoken, sentence, now)
+    if action.kind == "cancel":
+        return calendar.cancel(action, state.conversation_id, spoken, sentence, now)
+    return calendar.book(
         action,
         state.conversation_id,
         state.caller_phone,
         state.details.name,
-        action.offer.service,
-        action.offer.spoken,
+        service_id,
+        spoken,
         sentence,
-        deps.clock.now(),
+        now,
     )
+
+
+def _action_service(action: PendingAction) -> str:
+    """Return the service an action is about: the offer's for a booking, else the appointment's."""
+    return action.offer.service if action.kind == "book" else action.appointment.service
+
+
+def _action_spoken(action: PendingAction) -> str:
+    """Return the time an action is about: the new slot, or the appointment for a cancel.
+
+    It is the action's stored spoken text, which the claim rule looks for in later replies.
+    """
+    return action.appointment.spoken if action.kind == "cancel" else action.offer.spoken
 
 
 def _refuse(
@@ -493,13 +522,17 @@ def _refuse(
     deps.trace.event(
         "guard", name="write_to_calendar", input=action.action_id, decision="reject", code=error
     )
-    gone = action.offer.db_slot_id
+    # Drop the refused offer, so it cannot be chosen again. A cancel has no offer.
+    gone = action.offer.db_slot_id if action.offer else None
+    # A refused move or cancel may mean the appointment changed elsewhere. Reading the list
+    # again stops Current Facts showing it as it was, and stops its old time proving a claim.
+    refreshed = _refreshed_appointments(state, deps) if action.kind != "book" else {}
     return {
         "pending_action": None,
-        # Drop the refused offer, so it cannot be chosen again.
         "offers": [item for item in state.offers if item.db_slot_id != gone],
         "reply_text": deps.clinic.line(error.value),
         "fixed_reason": FixedReason.COMMIT_REFUSED,
+        **refreshed,
     }
 
 
@@ -513,10 +546,10 @@ def _find_record(deps: GraphDeps, action_id: str) -> ActionRecord | None:
 
 
 def _refreshed_appointments(state: CallState, deps: GraphDeps) -> dict[str, Any]:
-    """Reload the caller's appointments, so the new one can be discussed truthfully."""
+    """Reload the caller's appointments still to come, so they can be discussed truthfully."""
     try:
-        rows = deps.calendar.appointments_for(state.caller_phone, MAX_FOUND)
-    except Exception as error:  # The write succeeded, so this must not undo the turn.
+        rows = deps.calendar.appointments_for(state.caller_phone, MAX_FOUND, after=deps.clock.now())
+    except Exception as error:  # The write or refusal stands, so this must not undo the turn.
         logger.warning("Could not refresh appointments: %s", error)
         return {}
     found = with_call_ids(rows, state.next_appointment_number)

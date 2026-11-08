@@ -927,3 +927,160 @@ def test_a_quick_no_still_waits_for_the_models_reply(make_call):
     )
     state = call.say("I'd like a cleaning")
     assert state.reply_text == "Which day suits you?"
+
+
+# Stage 4: reschedule and cancel. Lucía (KNOWN_PHONE) has one check-up at least 3 days ahead.
+LOOKUP = ("lookup_appointment", {})
+FIND_MOVE = (
+    "find_slots",
+    {
+        "service": "check_up",
+        "date_from": "2026-11-16",
+        "date_to": "2026-11-20",
+        "appointment_id": "a1",
+    },
+)
+RESCHEDULE = ("prepare_reschedule", {"appointment_id": "a1", "slot_id": "s1"})
+CANCEL = ("prepare_cancel", {"appointment_id": "a1"})
+
+
+def move_call(make_call):
+    """Return a call by Lucía whose first turn prepares moving her check-up."""
+    return make_call(tool_reply(LOOKUP, FIND_MOVE), tool_reply(RESCHEDULE), phone=KNOWN_PHONE)
+
+
+def cancel_call(make_call):
+    """Return a call by Lucía whose first turn prepares cancelling her check-up."""
+    return make_call(tool_reply(LOOKUP), tool_reply(CANCEL), phone=KNOWN_PHONE)
+
+
+def test_a_reschedule_reads_back_both_times_with_the_name(make_call):
+    call = move_call(make_call)
+    state = call.say("Can I move my check-up to next week?")
+    action = state.pending_action
+    assert action.kind == "move"
+    assert state.reply_text == (
+        f"Just to confirm: move your check-up for Lucía Moreno from {action.appointment.spoken} "
+        f"to {action.offer.spoken}. Shall I go ahead?"
+    )
+    assert call.actions == []
+
+
+def test_a_yes_moves_the_appointment(make_call):
+    call = move_call(make_call)
+    first = call.say("Move my check-up please")
+    old = first.pending_action.appointment
+    new = first.pending_action.offer
+    state = call.say("yes", awaiting_yes=True)
+    assert [item.kind for item in call.actions] == ["move"]
+    assert state.reply_text == f"Your check-up is now on {new.spoken}."
+    calendar = call.deps.graph.calendar
+    assert calendar.get_appointment(old.db_id).db_slot_id == new.db_slot_id
+    assert calendar.slot_is_free(old.db_slot_id)
+    # The refreshed list shows the appointment at its new time.
+    assert [item.db_slot_id for item in state.found_appointments] == [new.db_slot_id]
+    assert state.offers == []
+
+
+def test_a_cancel_reads_back_with_the_name(make_call):
+    call = cancel_call(make_call)
+    state = call.say("Please cancel my check-up")
+    action = state.pending_action
+    assert action.kind == "cancel"
+    assert state.reply_text == (
+        f"Just to confirm: cancel your check-up for Lucía Moreno on {action.appointment.spoken}. "
+        "Shall I go ahead?"
+    )
+
+
+def test_a_yes_cancels_the_appointment(make_call):
+    call = cancel_call(make_call)
+    first = call.say("Please cancel my check-up")
+    appointment = first.pending_action.appointment
+    state = call.say("yes", awaiting_yes=True)
+    assert [item.kind for item in call.actions] == ["cancel"]
+    assert state.reply_text == f"Your check-up on {appointment.spoken} is cancelled."
+    assert call.deps.graph.calendar.get_appointment(appointment.db_id).status == "cancelled"
+    assert state.found_appointments == []
+
+
+def test_a_no_keeps_the_appointment(make_call):
+    call = make_call(
+        tool_reply(LOOKUP), tool_reply(CANCEL), text_reply("OK, I've left it."), phone=KNOWN_PHONE
+    )
+    first = call.say("Please cancel my check-up")
+    state = call.say("no, leave it", awaiting_yes=True)
+    assert call.actions == []
+    assert state.pending_action is None
+    appointment = first.pending_action.appointment
+    assert call.deps.graph.calendar.get_appointment(appointment.db_id).status == "active"
+
+
+def test_an_appointment_cancelled_before_the_yes_gives_the_not_owner_line(make_call, clinic):
+    call = cancel_call(make_call)
+    first = call.say("Please cancel my check-up")
+    with call.deps.graph.calendar._connect() as connection:
+        connection.execute(
+            "UPDATE appointments SET status = 'cancelled' WHERE id = ?",
+            (first.pending_action.appointment.db_id,),
+        )
+    state = call.say("yes", awaiting_yes=True)
+    assert state.reply_text == clinic.line("not_owner")
+    assert state.pending_action is None
+    assert call.actions == []
+    # The list is read again, so the gone appointment is not shown, or used as proof, later.
+    assert state.found_appointments == []
+
+
+def test_a_new_slot_taken_before_the_yes_gives_the_slot_taken_line(make_call, clinic):
+    call = move_call(make_call)
+    first = call.say("Move my check-up please")
+    offer = first.pending_action.offer
+    other = PendingAction(action_id="someone-else", kind="book", offer=offer)
+    call.deps.graph.calendar.book(
+        other, "c-other", "+34600888888", "Luis Mora", "check_up", "t", "Booked.", TEST_NOW
+    )
+    state = call.say("yes", awaiting_yes=True)
+    assert state.reply_text == clinic.line("slot_taken")
+    assert all(item.db_slot_id != offer.db_slot_id for item in state.offers)
+    old = first.pending_action.appointment
+    assert call.deps.graph.calendar.get_appointment(old.db_id).db_slot_id == old.db_slot_id
+
+
+def test_a_not_active_error_at_write_time_maps_to_not_owner(make_call, clinic, monkeypatch):
+    # Another call cancels the row between the check and the write.
+    from dental_agent.booking.calendar import NotActive
+
+    call = cancel_call(make_call)
+    call.say("Please cancel my check-up")
+
+    def cancelled_elsewhere(*args, **kwargs):
+        raise NotActive("1")
+
+    monkeypatch.setattr(call.deps.graph.calendar, "cancel", cancelled_elsewhere)
+    state = call.say("yes", awaiting_yes=True)
+    assert state.reply_text == clinic.line("not_owner")
+    assert state.fixed_reason is FixedReason.COMMIT_REFUSED
+
+
+def test_a_cancel_lead_in_may_name_the_appointments_service(make_call):
+    # The lead-in rule refuses other services, so it must be given the check-up, not None.
+    lead = "A check-up takes about 30 minutes."
+    call = make_call(tool_reply(LOOKUP), tool_reply(CANCEL, text=lead), phone=KNOWN_PHONE)
+    state = call.say("How long is a check-up? Actually, cancel mine")
+    assert state.reply_text == f"{lead} {state.pending_action.confirmation_text}"
+
+
+def test_an_appointment_for_a_service_no_longer_offered_still_reads_back(make_call):
+    # The service ID comes from the calendar row, so it may be missing from clinic.yaml.
+    call = cancel_call(make_call)
+    with call.deps.graph.calendar._connect() as connection:
+        connection.execute(
+            "UPDATE appointments SET service = 'old_whitening' WHERE patient_id = "
+            "(SELECT id FROM patients WHERE phone = ?)",
+            (KNOWN_PHONE,),
+        )
+    state = call.say("Please cancel my appointment")
+    assert state.reply_text.startswith("Just to confirm: cancel your old whitening for Lucía")
+    state = call.say("yes", awaiting_yes=True)
+    assert state.reply_text.startswith("Your old whitening on ")

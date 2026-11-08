@@ -1,4 +1,4 @@
-"""Fixed sentences for actions and call status. Stage: 1.
+"""Fixed sentences for actions and call status. Stage: 1 and 4.
 
 What this file is:
     The only place that writes sentences stating a successful action or the call's status.
@@ -35,24 +35,43 @@ def confirmation_text(
     spoken: str,
     name: str | None = None,
     in_addition: bool = False,
+    old_spoken: str | None = None,
 ) -> str:
     """Return the sentence that repeats a change and asks for a yes.
 
-    Stage 1 covers bookings. Moves and cancels arrive in Stage 4.
-    A booking always says the name, so a misheard name can be corrected here.
+    Every question says the patient's name: a booking so a misheard name can be corrected, and
+    a move or cancel so the caller hears whose appointment changes. spoken is the new time for
+    a book or move, and the appointment's time for a cancel. A move also needs old_spoken.
     """
-    if kind != "book":
-        raise ValueError(f"No confirmation question for {kind} yet")
-    # Warn the caller, so a yes cannot create a second appointment by accident.
-    extra = ", in addition to your existing appointment" if in_addition else ""
-    return f"Just to confirm: a {service} for {name} on {spoken}{extra}. Shall I book that?"
+    if kind == "book":
+        # Warn the caller, so a yes cannot create a second appointment by accident.
+        extra = ", in addition to your existing appointment" if in_addition else ""
+        return f"Just to confirm: a {service} for {name} on {spoken}{extra}. Shall I book that?"
+    if kind == "move":
+        if not old_spoken:
+            raise ValueError("A move question needs the old time")
+        return (
+            f"Just to confirm: move your {service} for {name} from {old_spoken} to {spoken}. "
+            "Shall I go ahead?"
+        )
+    if kind == "cancel":
+        return f"Just to confirm: cancel your {service} for {name} on {spoken}. Shall I go ahead?"
+    raise ValueError(f"No confirmation question for {kind}")
 
 
 def result_text(kind: str, service: str, spoken: str) -> str:
-    """Return the sentence stating what was written to the calendar."""
-    if kind != "book":
-        raise ValueError(f"No result sentence for {kind} yet")
-    return f"You're booked for a {service} on {spoken}."
+    """Return the sentence stating what was written to the calendar.
+
+    spoken is the new time for a book or move, and the appointment's time for a cancel. None
+    starts with "Done", because status_text and closing_text repeat these after "To confirm:".
+    """
+    if kind == "book":
+        return f"You're booked for a {service} on {spoken}."
+    if kind == "move":
+        return f"Your {service} is now on {spoken}."
+    if kind == "cancel":
+        return f"Your {service} on {spoken} is cancelled."
+    raise ValueError(f"No result sentence for {kind}")
 
 
 def status_text(results: list[str]) -> str:

@@ -160,7 +160,6 @@ class PendingAction(BaseModel):
     appointment: Appointment | None = None  # The target of a move or cancel.
     offer: Offer | None = None  # The new slot for a book or move.
     same_service_booked: bool = False  # Adds "in addition to your existing appointment".
-    include_name: bool = False  # Bookings always say the name. Stage 4 decides moves and cancels.
     confirmation_text: str = ""  # Filled in by the ask_confirmation node.
 
 

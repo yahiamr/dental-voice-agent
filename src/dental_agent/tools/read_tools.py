@@ -1,12 +1,14 @@
-"""Tools that only read. Stage: 1 and 5.
+"""Tools that only read. Stage: 1, 4 and 5.
 
 What this file is:
     How the model looks things up.
 
 What it contains:
     - find_slots: up to 2 earliest free slots. A new search replaces earlier offers. It refuses
-      a service this caller cannot book, so such a time is never offered.
-    - lookup_appointment: this caller's active appointments, up to 5.
+      a service this caller cannot book, so such a time is never offered. With appointment_id,
+      it searches new times for that found appointment's own service, so a new patient can move
+      their first visit, and refuses an appointment inside the notice period.
+    - lookup_appointment: this caller's active appointments still to come, up to 5.
     - get_clinic_facts: services, prices, hours or rules from clinic.yaml.
     - search_clinic_info: searches the clinic documents, from Stage 5.
 
@@ -26,7 +28,7 @@ from datetime import timedelta
 from dental_agent.clinic.retriever import SearchUnavailable
 from dental_agent.deps import GraphDeps
 from dental_agent.formatting import spoken_price, spoken_slot
-from dental_agent.guards.validate import caller_standing, service_error
+from dental_agent.guards.validate import caller_standing, notice_blocks, service_error
 from dental_agent.models import Appointment, ErrorCode, Offer, ToolOutcome, ToolResult
 from dental_agent.state import CallState
 from dental_agent.tools.schemas import (
@@ -44,14 +46,26 @@ MAX_APPOINTMENTS = 5  # A limit, so a spoken list stays short.
 def find_slots(args: FindSlotsInput, state: CallState, deps: GraphDeps) -> ToolOutcome:
     """Search free slots, and make the results the current offers."""
     clinic = deps.clinic
-    if clinic.service(args.service) is None:
+    service_id = args.service
+    if args.appointment_id is not None:
+        # A search to move an appointment is for that appointment's own service. The caller
+        # already has it, so the rule on what they may book does not apply.
+        moving = state.found(args.appointment_id)
+        if moving is None:
+            return failure(ErrorCode.NOT_OWNER, clinic)
+        # Never offer times for a move that prepare_reschedule would refuse.
+        actions = deps.calendar.actions_for_call(state.conversation_id)
+        if notice_blocks(moving, actions, deps.clock.now(), clinic):
+            return failure(ErrorCode.POLICY_BLOCKED, clinic)
+        service_id = moving.service
+    elif clinic.service(service_id) is None:
         return failure(ErrorCode.UNKNOWN_SERVICE, clinic)
-
-    # Never offer a time for a service this caller cannot book. The record decides.
-    status, booked = caller_standing(deps.calendar, state.caller_phone, clinic)
-    refusal = service_error(args.service, status, booked, clinic)
-    if refusal:
-        return failure(refusal, clinic)
+    else:
+        # Never offer a time for a service this caller cannot book. The record decides.
+        status, booked = caller_standing(deps.calendar, state.caller_phone, clinic)
+        refusal = service_error(service_id, status, booked, clinic)
+        if refusal:
+            return failure(refusal, clinic)
 
     # Reject dates that cannot be booked, before reading the calendar.
     now = deps.clock.now()
@@ -83,7 +97,7 @@ def find_slots(args: FindSlotsInput, state: CallState, deps: GraphDeps) -> ToolO
         Offer(
             slot_id=f"s{number + index}",
             db_slot_id=slot.db_slot_id,
-            service=args.service,
+            service=service_id,
             spoken=spoken_slot(slot.start_at),
         )
         for index, slot in enumerate(slots)
@@ -111,8 +125,11 @@ def lookup_appointment(
     args: LookupAppointmentInput, state: CallState, deps: GraphDeps
 ) -> ToolOutcome:
     """List the active appointments for the number on this call."""
-    # The phone comes from state, so the model cannot ask about another number.
-    rows = deps.calendar.appointments_for(state.caller_phone, MAX_APPOINTMENTS)
+    # The phone comes from state, so the model cannot ask about another number. Past
+    # appointments are left out, because they cannot be changed.
+    rows = deps.calendar.appointments_for(
+        state.caller_phone, MAX_APPOINTMENTS, after=deps.clock.now()
+    )
     if not rows:
         return failure(ErrorCode.NO_APPOINTMENT, deps.clinic)
     found = with_call_ids(rows, state.next_appointment_number)

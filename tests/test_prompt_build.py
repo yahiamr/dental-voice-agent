@@ -11,7 +11,7 @@ Used by:
     pytest
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -163,3 +163,28 @@ def test_a_found_appointment_booked_in_this_call_is_marked(clock, clinic):
         in block
     )
     assert "a2: check-up for Lucía Moreno on Friday 13\n" in block + "\n"
+
+
+def test_a_found_appointment_inside_the_notice_period_is_marked(clock, clinic):
+    # Tool results are dropped when a turn ends. Without this mark, a real call showed the model
+    # taking back a correct refusal on the next turn and offering the cancel again.
+    soon = found(1, "Monday 9 November at 16:00").model_copy(
+        update={"start_at": clock.now() + timedelta(hours=6)}
+    )
+    later = found(2, "Tuesday 10 November at 10:00")  # Exactly 24 hours ahead, so outside.
+    state = CallState(found_appointments=[soon, later])
+    block = state_block(state, [], clock, clinic)
+    assert (
+        "a1: check-up for Lucía Moreno on Monday 9 November at 16:00 (inside the 24-hour "
+        "notice period, so it cannot be moved or cancelled on this line)" in block
+    )
+    assert "a2: check-up for Lucía Moreno on Tuesday 10 November at 10:00\n" in block + "\n"
+
+
+def test_an_appointment_booked_in_this_call_has_no_notice_mark(clock, clinic):
+    soon = found(1, "Monday 9 November at 16:00").model_copy(
+        update={"start_at": clock.now() + timedelta(hours=6)}
+    )
+    block = state_block(CallState(found_appointments=[soon]), [action()], clock, clinic)
+    assert "(booked in this call)" in block
+    assert "notice period, so" not in block
