@@ -27,7 +27,7 @@ counts as a yes, and what the caller is told about a change.
 - **Structured call records.** Each call is stored as JSON with the transcript, the extracted
   details, the actions taken and a key-points summary, with a separate trace of every decision.
 
-At a glance: 918 tests, 98% branch coverage of the code that guards a booking, 21 scenarios
+At a glance: 935 tests, 98% branch coverage of the code that guards a booking, 21 scenarios
 passing on the real model, and the right handbook section found for 97% of labelled questions.
 
 ## How it was built
@@ -303,6 +303,9 @@ halves.
   speaks, so the bot never hears itself.
 - **Filler line:** when a turn needs a tool and another model call, a short "One moment." plays
   while they run. It is never said before a confirmation question or the emergency message.
+- **On screen:** the terminal shows the call as it happens: the caller's words as Deepgram hears
+  them, then each side's line, with a status line for listening, thinking and speaking. It adds
+  no delay, and piped output gets only the transcript.
 
 ## Design decisions
 
@@ -430,14 +433,14 @@ and [its README](evals/results/README.md) explains how to read and rerun each on
 
 | Measure | What it checks | Result |
 | --- | --- | --- |
-| Tests | The rules in code, exactly, with no key | 918 pass. Branch coverage 98% for the guards and booking (target 85%), 97% for the whole app |
+| Tests | The rules in code, exactly, with no key | 935 pass. Branch coverage 98% for the guards and booking (target 85%), 97% for the whole app |
 | Scenarios | Whole calls on the real model | 21 of 21 scenarios pass; 61 of 63 runs |
 | Golden set | The checker, one message at a time | 24 of 24 emergencies, no false alarm; 12 of 12 claims; 7 of 7 advice |
 | Retrieval | Handbook search on labelled questions | Right piece in the top 3 for 97% of questions (hybrid), 90% for keyword alone |
 
 ### Tests
 
-`uv run pytest` runs 918 tests in about 15 seconds, with no key and no network. They prove the rules
+`uv run pytest` runs 935 tests in about 15 seconds, with no key and no network. They prove the rules
 decided in code: the yes rule, every booking rule, the notice period, double booking, the reply
 check, and what happens when a model, the speech service or the calendar fails. Graph tests use
 a scripted model that misbehaves on purpose: it invents a slot, claims a booking that never
@@ -653,14 +656,14 @@ dental-voice-agent/
 │   ├── booking/             SQLite calendar, schema and sample data
 │   ├── clinic/              clinic facts, handbook index, embedder and search
 │   ├── prompts/             system prompt and the Current Facts block
-│   ├── speech/              keyboard, Deepgram, microphone and speaker
+│   ├── speech/              keyboard, Deepgram, microphone, speaker and the call display
 │   ├── storage/             conversation record, trace and summary
 │   ├── sentences.py         every sentence that states a change, from templates
 │   └── factories.py, config.py   settings, and the one place that builds providers
 ├── data/
 │   ├── clinic.yaml          services, prices, hours, rules, fixed lines
 │   └── docs/patient-handbook.md
-├── tests/                   918 tests, no key or network needed
+├── tests/                   935 tests, no key or network needed
 ├── evals/
 │   ├── scenarios.yaml       21 whole calls on the real model
 │   ├── intent_*.yaml        golden and held-out cases for the checker

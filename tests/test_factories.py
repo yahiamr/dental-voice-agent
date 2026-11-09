@@ -40,6 +40,7 @@ from dental_agent.factories import (
     create_speech,
 )
 from dental_agent.speech.deepgram import DeepgramSpeech
+from dental_agent.speech.display import CallDisplay
 from dental_agent.speech.text import TextSpeech
 
 
@@ -229,6 +230,11 @@ def test_voice_mode_gets_deepgram_with_the_key_terms_and_fixture_folder(tmp_path
     assert isinstance(speech, DeepgramSpeech)
     assert speech.keyterms == ["Mirador"]
     assert speech.fixture_dir == tmp_path / "fixtures"
+
+
+def test_a_voice_call_shows_itself_in_the_terminal(voice_extra):
+    speech = create_speech(settings(deepgram_api_key="test-key"), "voice")
+    assert isinstance(speech.display, CallDisplay)
 
 
 def test_voice_mode_exits_naming_the_missing_deepgram_key(voice_extra):

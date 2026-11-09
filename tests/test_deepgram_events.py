@@ -607,3 +607,73 @@ def test_deepgram_is_told_the_mics_own_rate(tmp_path):
     assert client.connect_options["sample_rate"] == 48000
     with wave.open(str(tmp_path / "turn-001.wav")) as audio:
         assert audio.getframerate() == 48000
+
+
+# ---------- The call display ----------
+
+
+class RecordingDisplay:
+    """Records what the backend asks the display to show."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        return lambda *args: self.calls.append((name, *args))
+
+
+def test_live_text_joins_final_segments_and_the_latest_interim():
+    collector = TurnCollector(min_speech_ms=200)
+    collector.add(results("I'd like", final=False))
+    assert collector.live_text == "I'd like"
+    collector.add(results("I'd like a cleaning.", final=True))
+    collector.add(results("on Tuesday", start=1.0, final=False))
+    assert collector.live_text == "I'd like a cleaning. on Tuesday"
+    collector.add(results("on Tuesday.", start=1.0, final=True))
+    assert collector.live_text == "I'd like a cleaning. on Tuesday."
+
+
+def test_a_heard_reply_is_shown_as_it_arrives_then_as_the_callers_line():
+    shown = RecordingDisplay()
+    connection = FakeConnection(
+        [results("I'd like", final=False), results("I'd like a cleaning.", speech_final=True)]
+    )
+    speech = backend(FakeClient(connection))
+    speech.display = shown
+    speech.transcribe(expect_yes=False)
+    names = [call[0] for call in shown.calls]
+    assert names[0] == "listening"
+    assert ("words", "I'd like") in shown.calls
+    assert names[-2:] == ["caller", "thinking"]
+    assert shown.calls[-2] == ("caller", "I'd like a cleaning.")
+
+
+def test_silence_shows_no_callers_line():
+    shown = RecordingDisplay()
+    speech = backend(FakeClient(FakeConnection([])))
+    speech.display = shown
+    heard = speech.transcribe(expect_yes=False)
+    assert heard.kind == "no_speech"
+    assert "caller" not in [call[0] for call in shown.calls]
+
+
+def test_a_spoken_reply_is_shown_before_it_plays():
+    shown = RecordingDisplay()
+    speech = backend(FakeClient(chunks=[b"\x00\x00" * 10]))
+    speech.display = shown
+    speech.speak("Which day suits you?")
+    assert shown.calls == [("bot", "Which day suits you?"), ("speaking",), ("thinking",)]
+
+
+def test_closing_the_backend_closes_the_display():
+    shown = RecordingDisplay()
+    speech = backend(FakeClient(FakeConnection([])))
+    speech.display = shown
+    speech.close()
+    assert ("close",) in shown.calls
+
+
+def test_the_backend_shows_nothing_without_a_display():
+    speech = backend(FakeClient(chunks=[b"\x00\x00" * 10]))
+    assert speech.display is None
+    assert speech.speak("Hello.").ok

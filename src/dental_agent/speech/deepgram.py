@@ -6,8 +6,11 @@ What this file is:
 What it contains:
     - STT_MODEL (nova-3) and TTS_MODEL (aura-2-thalia-en).
     - listen_options(settings, expect_yes, keyterms): the live socket's settings for one turn.
-    - TurnCollector: turns Deepgram's messages for one turn into a SpeechResult.
-    - DeepgramSpeech: transcribe(expect_yes) and speak(text), with backend_name "deepgram".
+    - TurnCollector: turns Deepgram's messages for one turn into a SpeechResult, and keeps
+      live_text, the words heard so far, for the display.
+    - DeepgramSpeech: transcribe(expect_yes) and speak(text), with backend_name "deepgram". An
+      optional CallDisplay (speech/display.py) shows the call in the terminal: listening with
+      the live words, the caller's line, thinking, the bot's line, and speaking.
 
 How to understand it:
     Listening opens one live WebSocket per turn, so the end-of-speech wait can differ by turn:
@@ -159,6 +162,15 @@ class TurnCollector:
         self._segments: list[tuple[str, float, float, float]] = []
         # The latest result with words, final or not. Used only if Deepgram sends no final.
         self._interim: tuple[str, float, float, float] | None = None
+        self._pending = ""  # Words heard after the last final segment, for the display.
+
+    @property
+    def live_text(self) -> str:
+        """Return the words heard so far: the final segments, then any words not yet final."""
+        parts = [segment[0] for segment in self._segments]
+        if self._pending:
+            parts.append(self._pending)
+        return " ".join(parts)
 
     @property
     def has_segments(self) -> bool:
@@ -183,6 +195,9 @@ class TurnCollector:
             self._interim = segment
             if message.is_final:
                 self._segments.append(segment)
+                self._pending = ""
+            else:
+                self._pending = text
         if getattr(message, "from_finalize", False):
             # Deepgram's reply to Finalize: everything it had is now final.
             return self.heard_words
@@ -223,6 +238,7 @@ class DeepgramSpeech:
         api_key: str,
         keyterms: list[str],
         fixture_dir: Path | str | None = None,
+        display: Any = None,
         client: Any = None,
         mic: Any = None,
         speaker: Any = None,
@@ -231,6 +247,8 @@ class DeepgramSpeech:
         self.settings = settings
         self.keyterms = keyterms
         self.fixture_dir = Path(fixture_dir) if fixture_dir else None
+        # A CallDisplay shows the call in the terminal. None shows nothing, as in the tests.
+        self.display = display
         self._client = client if client is not None else _make_client(api_key)
         self._mic = mic if mic is not None else Microphone()
         self._speaker = speaker if speaker is not None else Speaker()
@@ -256,6 +274,11 @@ class DeepgramSpeech:
             self._mic.stop_listening()
         if self.fixture_dir is not None:
             self._save_fixture(recorded, heard, expect_yes)
+        if self.display is not None:
+            if heard.kind == "speech":
+                self.display.caller(heard.text)
+            # The session runs the agent next, until it speaks or listens again.
+            self.display.thinking()
         return heard
 
     def _listen(
@@ -267,6 +290,8 @@ class DeepgramSpeech:
         stop = threading.Event()
         loudness = LoudnessTracker(rate=self._mic.rate)
         self._mic.start_listening()
+        if self.display is not None:
+            self.display.listening()
         stream_start = self._now()
         sender = threading.Thread(
             target=self._send, args=(connection, messages, stop, recorded, loudness), daemon=True
@@ -340,7 +365,10 @@ class DeepgramSpeech:
                 if getattr(message, "type", "") == "Error":
                     logger.warning("Deepgram error: %s", getattr(message, "description", ""))
                     return "error"
-                if collector.add(message):
+                ended = collector.add(message)
+                if self.display is not None and collector.heard_words:
+                    self.display.words(collector.live_text)
+                if ended:
                     return "ended"
             if not collector.heard_words and now - started > self.settings.silence_timeout_s:
                 return "silence"
@@ -360,6 +388,9 @@ class DeepgramSpeech:
     def speak(self, text: str, asks_confirmation: bool = False) -> SpeakResult:
         """Say one reply. asks_confirmation is for test drivers, and is ignored here."""
         timings: dict[str, float] = {}
+        if self.display is not None:
+            self.display.bot(text)
+            self.display.speaking()
         try:
             chunks = self._client.speak.v1.audio.generate(
                 text=text,
@@ -379,12 +410,19 @@ class DeepgramSpeech:
             timings["output_latency_s"] = float(getattr(self._speaker, "latency", 0.0))
         except Exception as error:  # The session prints a line that could not be spoken.
             logger.warning("Deepgram speech failed: %s", error)
-            return SpeakResult(ok=False, timings=timings)
-        time.sleep(self.settings.mic_reopen_ms / 1000)
-        return SpeakResult(ok=True, timings=timings)
+            ok = False
+        else:
+            time.sleep(self.settings.mic_reopen_ms / 1000)
+            ok = True
+        if self.display is not None:
+            # Either a filler line while the agent still works, or the reply before listening.
+            self.display.thinking()
+        return SpeakResult(ok=ok, timings=timings)
 
     def close(self) -> None:
-        """Release the microphone and the speaker."""
+        """Release the microphone and the speaker, and clear the display."""
+        if self.display is not None:
+            self.display.close()
         self._mic.close()
         close_speaker = getattr(self._speaker, "close", None)
         if close_speaker is not None:

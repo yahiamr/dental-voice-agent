@@ -1,6 +1,6 @@
 # Test coverage
 
-Commit: `46ba380-dirty`. Run on 2026-11-08 22:14. Tests: 918 passed.
+Commit: `ae5d80e-dirty`. Run on 2026-11-09 01:23. Tests: 935 passed.
 
 Branch coverage, which counts each side of every `if` as well as each line.
 
@@ -33,7 +33,7 @@ entry points call live APIs, and their pure functions are tested in `tests/`.
 | src/dental\_agent/clock.py                |       13 |        0 |        0 |        0 |    100% |
 | src/dental\_agent/config.py               |       52 |        1 |        4 |        1 |     96% |
 | src/dental\_agent/deps.py                 |       33 |        0 |        0 |        0 |    100% |
-| src/dental\_agent/factories.py            |      113 |        6 |       24 |        0 |     96% |
+| src/dental\_agent/factories.py            |      114 |        6 |       24 |        0 |     96% |
 | src/dental\_agent/formatting.py           |        5 |        0 |        0 |        0 |    100% |
 | src/dental\_agent/graph/build.py          |       26 |        0 |        2 |        0 |    100% |
 | src/dental\_agent/graph/nodes.py          |      253 |       15 |       68 |        2 |     95% |
@@ -48,7 +48,8 @@ entry points call live APIs, and their pure functions are tested in `tests/`.
 | src/dental\_agent/session.py              |      265 |       11 |       54 |        3 |     96% |
 | src/dental\_agent/speech/audio.py         |      143 |        9 |       30 |        4 |     92% |
 | src/dental\_agent/speech/base.py          |       15 |        0 |        0 |        0 |    100% |
-| src/dental\_agent/speech/deepgram.py      |      244 |       11 |       60 |        3 |     95% |
+| src/dental\_agent/speech/deepgram.py      |      271 |       11 |       76 |        3 |     96% |
+| src/dental\_agent/speech/display.py       |      100 |        3 |       30 |        3 |     95% |
 | src/dental\_agent/speech/text.py          |       15 |        0 |        2 |        0 |    100% |
 | src/dental\_agent/state.py                |       40 |        0 |        0 |        0 |    100% |
 | src/dental\_agent/storage/conversation.py |       33 |        0 |        0 |        0 |    100% |
@@ -60,6 +61,6 @@ entry points call live APIs, and their pure functions are tested in `tests/`.
 | src/dental\_agent/tools/read\_tools.py    |      111 |        1 |       30 |        1 |     99% |
 | src/dental\_agent/tools/schemas.py        |       48 |        1 |        4 |        1 |     96% |
 | src/dental\_agent/tools/session\_tools.py |       25 |        0 |        6 |        0 |    100% |
-| **TOTAL**                                 | **2952** |   **82** |  **632** |   **34** | **97%** |
+| **TOTAL**                                 | **3080** |   **85** |  **678** |   **37** | **97%** |
 
 9 empty files skipped.

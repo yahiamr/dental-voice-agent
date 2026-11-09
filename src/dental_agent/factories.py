@@ -10,7 +10,8 @@ What it contains:
     - create_retriever: builds or refreshes the search index, then returns hybrid search, keyword
       search when there is no embedding model, or no search when there are no documents.
     - create_checkpointer: in-memory by default, SQLite with an optional extra.
-    - create_speech: text mode always gets TextSpeech, and voice mode gets DeepgramSpeech.
+    - create_speech: text mode always gets TextSpeech, and voice mode gets DeepgramSpeech with
+      a CallDisplay.
     - create_checker: the checker chain, with each listed backend whose key is set.
     - build_deps(settings, mode, fixture_dir): calls these and returns one Deps object.
 
@@ -198,8 +199,10 @@ def create_speech(
     key = _require_key(settings.deepgram_api_key, "DEEPGRAM_API_KEY")
     # Imported here, so text mode never loads the voice backend.
     from dental_agent.speech.deepgram import DeepgramSpeech
+    from dental_agent.speech.display import CallDisplay
 
-    return DeepgramSpeech(settings, key, keyterms or [], fixture_dir)
+    # The display shows both sides and what the bot is doing, so a voice call can be followed.
+    return DeepgramSpeech(settings, key, keyterms or [], fixture_dir, display=CallDisplay())
 
 
 def create_checker(settings: Settings) -> CheckerChain:
