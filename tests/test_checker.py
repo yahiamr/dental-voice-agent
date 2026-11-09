@@ -455,3 +455,132 @@ def test_a_cut_off_haiku_answer_names_the_token_limit():
 def test_the_haiku_checker_raises_checker_error_for_a_broken_answer(content, why):
     with pytest.raises(CheckerError):
         haiku_with(content).ask("text", QUESTIONS, "caller", 2.0)
+
+
+# ---------- The advice grey zone: a second opinion near the cut-off ----------
+
+REPLY = reply_questions()
+GREY = {"medical_advice": (0.3, 0.5), "claims_change": (0.5, 0.65)}
+
+
+def reply_answer(layer="jev", advice=False, advice_p=None, claim=False, claim_p=0.02):
+    """A checker answer to the reply questions, with Jev's probabilities when given."""
+    probabilities = (
+        {} if advice_p is None else {"claims_change": claim_p, "medical_advice": advice_p}
+    )
+    return CheckAnswer(
+        layer=layer,
+        answers={"claims_change": claim, "medical_advice": advice},
+        probabilities=probabilities,
+        model="m",
+    )
+
+
+def test_a_jev_no_in_the_grey_zone_asks_the_next_backend_about_advice_only():
+    jev = ScriptedChecker("jev", [reply_answer(advice_p=0.41)])
+    haiku = ScriptedChecker("anthropic", [reply_answer("anthropic", advice=True)])
+    chain = CheckerChain([jev, haiku], {"jev": 1.0, "anthropic": 2.0}, second_opinion=GREY)
+    result = chain.ask("Five hours is longer than expected.", REPLY, "reply", 12.0)
+    assert result.answers["medical_advice"] is True
+    assert result.answers["claims_change"] is False  # Jev's other answers stand.
+    assert result.layer == "jev"
+    assert result.second_opinions == {"medical_advice": True}
+    assert haiku.questions == [{"medical_advice": REPLY["medical_advice"]}]
+    assert [a.get("second_opinion") for a in chain.last_attempts] == [None, "medical_advice"]
+
+
+def test_the_second_opinion_can_also_agree_with_jev():
+    jev = ScriptedChecker("jev", [reply_answer(advice_p=0.35)])
+    haiku = ScriptedChecker("anthropic", [reply_answer("anthropic", advice=False)])
+    chain = CheckerChain([jev, haiku], {"jev": 1.0, "anthropic": 2.0}, second_opinion=GREY)
+    result = chain.ask("text", REPLY, "reply", 12.0)
+    assert result.answers["medical_advice"] is False
+    assert result.second_opinions == {"medical_advice": False}
+
+
+@pytest.mark.parametrize("advice_p", [0.12, 0.29])
+def test_a_clear_jev_no_needs_no_second_opinion(advice_p):
+    jev = ScriptedChecker("jev", [reply_answer(advice_p=advice_p)])
+    haiku = ScriptedChecker("anthropic", [])  # Any call would raise ScriptExhausted.
+    chain = CheckerChain([jev, haiku], {"jev": 1.0, "anthropic": 2.0}, second_opinion=GREY)
+    assert chain.ask("text", REPLY, "reply", 12.0).answers["medical_advice"] is False
+    assert haiku.calls == 0
+
+
+def test_a_jev_yes_needs_no_second_opinion():
+    jev = ScriptedChecker("jev", [reply_answer(advice=True, advice_p=0.72)])
+    haiku = ScriptedChecker("anthropic", [])
+    chain = CheckerChain([jev, haiku], {"jev": 1.0, "anthropic": 2.0}, second_opinion=GREY)
+    assert chain.ask("text", REPLY, "reply", 12.0).answers["medical_advice"] is True
+    assert haiku.calls == 0
+
+
+def test_an_answer_with_no_probability_needs_no_second_opinion():
+    jev = ScriptedChecker("jev", [CheckerError("down")])
+    haiku = ScriptedChecker("anthropic", [reply_answer("anthropic", advice=False)])
+    chain = CheckerChain([jev, haiku], {"jev": 1.0, "anthropic": 2.0}, second_opinion=GREY)
+    result = chain.ask("text", REPLY, "reply", 12.0)
+    assert result.layer == "anthropic"
+    assert haiku.calls == 1
+    assert result.second_opinions == {}
+
+
+def test_a_failed_second_opinion_keeps_jevs_answer_and_counts_a_strike():
+    jev = ScriptedChecker("jev", [reply_answer(advice_p=0.41)])
+    haiku = ScriptedChecker("anthropic", [CheckerError("down")])
+    chain = CheckerChain([jev, haiku], {"jev": 1.0, "anthropic": 2.0}, second_opinion=GREY)
+    result = chain.ask("text", REPLY, "reply", 12.0)
+    assert result.answers["medical_advice"] is False
+    assert result.second_opinions == {}
+    assert chain.last_attempts[-1]["ok"] is False and chain.last_attempts[-1]["strike"]
+
+
+def test_no_second_opinion_without_the_time_for_one():
+    clock = FakeClock()
+    jev = ScriptedChecker("jev", [reply_answer(advice_p=0.41)])
+    jev.on_call = lambda: setattr(clock, "now", clock.now + 0.95)
+    haiku = ScriptedChecker("anthropic", [])
+    chain = CheckerChain(
+        [jev, haiku], {"jev": 1.0, "anthropic": 2.0}, clock=clock, second_opinion=GREY
+    )
+    assert chain.ask("text", REPLY, "reply", 1.0).answers["medical_advice"] is False
+    assert haiku.calls == 0
+
+
+def test_a_question_not_asked_gets_no_second_opinion():
+    jev = ScriptedChecker("jev", [answer()])
+    haiku = ScriptedChecker("anthropic", [])
+    chain = CheckerChain([jev, haiku], {"jev": 1.0, "anthropic": 2.0}, second_opinion=GREY)
+    assert chain.ask("text", QUESTIONS, "caller", 12.0).answers == {"emergency": True}
+    assert haiku.calls == 0
+
+
+def test_a_jev_yes_on_a_claim_just_over_the_cut_off_gets_a_second_opinion():
+    jev = ScriptedChecker("jev", [reply_answer(claim=True, claim_p=0.59, advice_p=0.11)])
+    haiku = ScriptedChecker("anthropic", [reply_answer("anthropic", claim=False)])
+    chain = CheckerChain([jev, haiku], {"jev": 1.0, "anthropic": 2.0}, second_opinion=GREY)
+    text = "Your check-up is within the notice period, so I can't cancel it here."
+    result = chain.ask(text, REPLY, "reply", 12.0)
+    assert result.answers["claims_change"] is False
+    assert result.second_opinions == {"claims_change": False}
+    assert haiku.questions == [{"claims_change": REPLY["claims_change"]}]
+
+
+def test_a_confident_jev_claim_needs_no_second_opinion():
+    jev = ScriptedChecker("jev", [reply_answer(claim=True, claim_p=0.88, advice_p=0.04)])
+    haiku = ScriptedChecker("anthropic", [])
+    chain = CheckerChain([jev, haiku], {"jev": 1.0, "anthropic": 2.0}, second_opinion=GREY)
+    assert chain.ask("You're booked.", REPLY, "reply", 12.0).answers["claims_change"] is True
+    assert haiku.calls == 0
+
+
+def test_both_questions_in_their_grey_zones_get_one_second_opinion_each():
+    jev = ScriptedChecker("jev", [reply_answer(claim=True, claim_p=0.55, advice_p=0.4)])
+    haiku = ScriptedChecker(
+        "anthropic",
+        [reply_answer("anthropic", advice=True), reply_answer("anthropic", claim=False)],
+    )
+    chain = CheckerChain([jev, haiku], {"jev": 1.0, "anthropic": 2.0}, second_opinion=GREY)
+    result = chain.ask("text", REPLY, "reply", 12.0)
+    assert result.answers == {"claims_change": False, "medical_advice": True}
+    assert haiku.calls == 2

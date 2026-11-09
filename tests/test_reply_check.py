@@ -534,7 +534,124 @@ def test_an_instruction_appended_to_handbook_text_is_not_excused(text, clinic):
             "eating or drinking anything hot."
         ),
         "Your lip and tongue may feel numb for two to three hours after a local anaesthetic.",
+        # Wordings from the scenario runs on 2026-11-09, refused before "avoid" counted as "not",
+        # contractions were split off, and words were compared by stem.
+        (
+            "If you had a local anaesthetic, your lip and tongue may stay numb for two to three "
+            "hours. Please avoid biting them and wait until the numbness wears off before eating "
+            "or drinking anything hot."
+        ),
+        (
+            "If you had a local anaesthetic, your lip and tongue may stay numb for two to three "
+            "hours. Please be careful not to bite them while they're numb."
+        ),
     ],
 )
 def test_paraphrases_of_the_handbook_are_still_excused(text, clinic):
     assert not run(text, clinic, model_advice=True, sources=[AFTERCARE]).replaced
+
+
+# The live aftercare answer from a voice call on 2026-11-09, which the checker flagged as advice
+# (0.72) and the exemption wrongly refused: it credits the handbook, takes "after a filling" from
+# the piece's heading, and joins two fixed lines into one sentence.
+FILLING_PIECE = (
+    "After your visit › After a filling "
+    + AFTERCARE
+    + " Tooth-coloured fillings are fully set when you leave the clinic."
+)
+LIVE_AFTERCARE = (
+    "The handbook says your lip and tongue may feel numb for two to three hours after a filling "
+    "with local anaesthetic, so take care not to bite them. For anything beyond that, the "
+    "dentist can advise at your visit, or you can call the clinic on {line}."
+)
+
+
+def test_the_live_aftercare_answer_is_excused(clinic):
+    text = LIVE_AFTERCARE.format(line=clinic.clinic_line)
+    decision = run(text, clinic, model_advice=True, sources=[FILLING_PIECE])
+    assert not decision.replaced
+    assert decision.reason == "sourced"
+
+
+@pytest.mark.parametrize(
+    "credit",
+    [
+        "The handbook says",
+        "According to the handbook,",
+        # Wordings the live model used in the scenario runs.
+        "According to our handbook,",
+        "According to the clinic's handbook,",
+        "According to the clinic handbook,",
+        "The clinic's handbook says that",
+    ],
+)
+def test_crediting_the_handbook_is_not_the_models_own_words(credit, clinic):
+    text = f"{credit} your lip and tongue may feel numb for two to three hours."
+    assert not run(text, clinic, model_advice=True, sources=[AFTERCARE]).replaced
+
+
+def test_crediting_the_handbook_does_not_excuse_an_instruction(clinic):
+    text = "The handbook says to hold ice on your lip tonight."
+    assert run(text, clinic, model_advice=True, sources=[AFTERCARE]).replaced
+
+
+def test_words_from_the_pieces_heading_count_as_the_handbooks(clinic):
+    # graph/nodes.py puts each piece's heading before its text, so this is the source it gets.
+    text = (
+        "Your lip and tongue may feel numb for two to three hours after a filling, so take care "
+        "not to bite them."
+    )
+    assert not run(text, clinic, model_advice=True, sources=[FILLING_PIECE]).replaced
+    # Without the heading, "after" faces the source's "before eating" and reads as a flip.
+    assert run(text, clinic, model_advice=True, sources=[AFTERCARE]).replaced
+
+
+def test_a_sentence_joining_two_fixed_lines_is_excused(clinic):
+    text = (
+        "For anything beyond that, the dentist can advise you at your visit, or you can call "
+        f"the clinic on {clinic.clinic_line}."
+    )
+    assert not run(text, clinic, model_advice=True, sources=[AFTERCARE]).replaced
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "For anything beyond that, rinse with warm salt water and call the clinic on {line}.",
+        "The dentist can advise you at your visit, and you should hold ice on it tonight.",
+    ],
+)
+def test_fixed_lines_do_not_excuse_an_instruction_beside_them(text, clinic):
+    text = text.format(line=clinic.clinic_line)
+    assert run(text, clinic, model_advice=True, sources=[AFTERCARE]).replaced
+
+
+def test_fixed_lines_still_excuse_nothing_without_a_search(clinic):
+    text = f"The dentist can advise you at your visit, or call the clinic on {clinic.clinic_line}."
+    assert run(text, clinic, model_advice=True).replaced
+
+
+def test_avoid_counts_as_a_negation_both_ways(clinic):
+    # "Avoid biting" keeps the source's "not bite", so dropping it is still a flipped meaning.
+    flipped = "Your lip may feel numb for two to three hours, so you can bite and eat hot food."
+    assert run(flipped, clinic, model_advice=True, sources=[AFTERCARE]).replaced
+    source = "Avoid hot drinks for two hours."
+    assert run(
+        "Have hot drinks for two hours.", clinic, model_advice=True, sources=[source]
+    ).replaced
+
+
+def test_a_handbook_sentence_split_in_two_is_still_the_handbook(clinic):
+    # A live reply split "Take care not to bite them, and wait until the numbness has worn off
+    # before eating…" into two sentences, so the second has no "not" of its own.
+    text = (
+        "The handbook says that if you had a local anaesthetic, your lip and tongue may feel numb "
+        "for two to three hours, so take care not to bite them. Wait until the numbness wears "
+        "off before eating or drinking anything hot."
+    )
+    assert not run(text, clinic, model_advice=True, sources=[FILLING_PIECE]).replaced
+
+
+def test_a_split_does_not_let_a_negation_go_missing(clinic):
+    text = "Take care to bite them. Wait until the numbness wears off before eating anything hot."
+    assert run(text, clinic, model_advice=True, sources=[AFTERCARE]).replaced

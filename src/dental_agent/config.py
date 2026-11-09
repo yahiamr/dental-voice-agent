@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     checker_jev_timeout_s: float = 1.0  # Measured p90 0.31 s, maximum 0.95 s.
     checker_anthropic_timeout_s: float = 2.0  # Measured p90 0.87 s.
     checker_cutoff: float = 0.5  # A Jev probability at or above this counts as yes. Not tuned.
+    # Grey zones: a Jev score from the first number up to the second asks the next backend for
+    # a second opinion. A reply judging the caller's own symptom scored 0.41 for advice on a
+    # live call and passed; correct notice-period refusals scored 0.51 to 0.59 for a claim and
+    # were replaced.
+    checker_advice_grey_zone: tuple[float, float] = (0.3, 0.5)
+    checker_claim_grey_zone: tuple[float, float] = (0.5, 0.65)
 
     # Keys. SecretStr hides the value if a setting is ever printed.
     anthropic_api_key: SecretStr | None = None

@@ -364,3 +364,8 @@ def test_tests_never_use_the_real_search_index():
     real = (Path(__file__).parent.parent / "data").resolve()
     assert real not in Settings().rag_path.resolve().parents
     assert real not in Settings().models_dir.resolve().parents
+
+
+def test_the_chain_asks_for_a_second_opinion_near_the_cut_off():
+    chain = create_checker(settings(openrouter_api_key="or-key", anthropic_api_key="an-key"))
+    assert chain.second_opinion == {"medical_advice": (0.3, 0.5), "claims_change": (0.5, 0.65)}

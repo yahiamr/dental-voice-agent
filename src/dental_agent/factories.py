@@ -226,7 +226,14 @@ def create_checker(settings: Settings) -> CheckerChain:
         "jev": settings.checker_jev_timeout_s,
         "anthropic": settings.checker_anthropic_timeout_s,
     }
-    return CheckerChain(backends, {backend.name: limits[backend.name] for backend in backends})
+    return CheckerChain(
+        backends,
+        {backend.name: limits[backend.name] for backend in backends},
+        second_opinion={
+            "medical_advice": settings.checker_advice_grey_zone,
+            "claims_change": settings.checker_claim_grey_zone,
+        },
+    )
 
 
 def build_deps(

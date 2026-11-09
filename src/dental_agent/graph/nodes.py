@@ -480,6 +480,7 @@ def _trace_checker(deps: GraphDeps, step: str, answer: Any) -> None:
         layer=answer.layer if answer else "fixed",
         probabilities=answer.probabilities if answer else {},
         model=answer.model if answer else None,
+        second_opinions=answer.second_opinions if answer else {},
         attempts=deps.checker.last_attempts,
     )
 
@@ -490,23 +491,21 @@ def _past_deadline(state: CallState, deps: GraphDeps) -> bool:
 
 
 def _reply_sources(state: CallState, deps: GraphDeps) -> list[str]:
-    """Return the clinic's own text the reply checks may accept: this turn's search results and
-    the last search's pieces, which Current Facts repeats on the next turn, plus the clinic's
-    fixed lines when there are any, such as "The dentist can advise you at your visit", which
-    the prompt asks for after an aftercare answer. With no search in the call so far, nothing is
-    accepted, so a fixed line can never excuse advice of the model's own."""
-    found = search_texts(state.turn_messages) + [item["text"] for item in state.last_search]
-    if not found:
-        return []
-    # Filled in, so a line such as call_clinic holds the number the model actually says.
-    return [*found, *(deps.clinic.line(key) for key in deps.clinic.lines)]
+    """Return the handbook text the reply checks may accept: this turn's search results and the
+    last search's pieces, which Current Facts repeats on the next turn, each with its heading.
+    check_reply adds the clinic's fixed lines, such as "The dentist can advise you at your
+    visit", but only when this returns something, so with no search in the call a fixed line
+    can never excuse advice of the model's own."""
+    last = [_with_heading(item) for item in state.last_search]
+    return search_texts(state.turn_messages) + last
 
 
 def search_texts(turn_messages: list[Any]) -> list[str]:
     """Return the text of every document piece search_clinic_info returned this turn.
 
     The reply checks accept the clinic's own handbook text even when the checker calls it
-    advice, so they need exactly what search gave the model, and nothing else.
+    advice, so they need exactly what search gave the model, and nothing else: each piece's
+    heading and text.
     """
     texts = []
     for message in turn_messages:
@@ -518,11 +517,21 @@ def search_texts(turn_messages: list[Any]) -> list[str]:
             continue
         if isinstance(data, list):
             texts += [
-                item["text"]
+                _with_heading(item)
                 for item in data
                 if isinstance(item, dict) and "heading" in item and "text" in item
             ]
     return texts
+
+
+def _with_heading(item: dict[str, str]) -> str:
+    """Return a piece's text with its heading in front, as the model saw them together.
+
+    The heading has no full stop, so it joins the first sentence: a reply may take "after a
+    filling" from the heading "After a filling" and the rest from the sentence below it.
+    """
+    heading = item.get("heading", "").strip()
+    return f"{heading} {item['text']}" if heading else item["text"]
 
 
 def _write(state: CallState, deps: GraphDeps, action: PendingAction) -> ActionRecord:

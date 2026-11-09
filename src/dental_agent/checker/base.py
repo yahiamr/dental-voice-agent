@@ -46,6 +46,9 @@ class CheckAnswer(BaseModel):
     probabilities: dict[str, float] = Field(default_factory=dict)
     model: str  # The model version the response names, for the trace.
     seconds: float = 0.0  # Set by the chain: the whole ask, including failed attempts.
+    # Set by the chain: what a second backend answered for a question in the grey zone. Its
+    # answer replaces this one's in answers.
+    second_opinions: dict[str, bool] = Field(default_factory=dict)
 
 
 class Checker(Protocol):

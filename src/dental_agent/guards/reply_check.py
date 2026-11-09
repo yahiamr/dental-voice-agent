@@ -8,14 +8,19 @@ What it contains:
       model_advice, sources) -> ReplyDecision.
     - check_lead_in(text, service_id, actions, found_appointments, clinic, model_claim,
       model_advice, sources) -> ReplyDecision.
-    - repeats_sources(text, sources): whether every statement repeats the clinic's own text.
+    - repeats_sources(text, sources, fixed_lines): whether every statement repeats the clinic's
+      own text.
       The checker's advice flag alone does not replace such a reply (reason "sourced"): the
       handbook's aftercare text is the clinic's, not the model's. Each statement, including any
       question but a plain offer of more help, needs 75% of its meaningful words in one source
       sentence or pair, every number, no order word swapped for its opposite ("after" for
       "before"), the same negations, and a shared pair of neighbouring words in every clause,
       so an instruction cannot ride on a long handbook sentence. A dosing word is never
-      excused, and claims are still checked.
+      excused, and claims are still checked. An opening credit such as "The handbook says" is
+      not the model's own words. Once there is a search, the clinic's fixed lines count as
+      sources too, alone or joined to one source sentence, since a reply may end an aftercare
+      answer with "the dentist can advise you at your visit, or call the clinic". A clause
+      made only of linking words, such as "for anything beyond that", needs no shared pair.
     - combine_reply(phrase_claim, dosing_hit, model_claim, model_advice): whether a claim and
       whether advice is flagged, by either layer. The eval uses it too.
     - claimed_kinds(text, claim_phrases): the kinds of change the text claims, leaving out a
@@ -126,6 +131,23 @@ ORDER_WORDS = frozenset(OPPOSITES)
 # The only words a question may have and still be skipped, such as "Is there anything else I
 # can help with?". Any other question must repeat the sources too, so advice cannot hide in one.
 OFFER_WORDS = frozenset({"anything", "else", "help", "today", "other", "something", "question"})
+# Where a source sentence splits into clauses that may stand alone: at punctuation only, so
+# "before eating or drinking anything hot" stays whole.
+SOURCE_CLAUSE_BREAK = re.compile(r"[,;:]")
+# Joining words the shared filler list lacks. They split a reply's clauses but carry no
+# meaning of their own.
+JOINING_WORDS = frozenset({"while"})
+# Words that only link a clause to the one before it. A clause made of these alone, such as
+# "for anything beyond that", says nothing of its own, so it needs no shared word pair. Its words
+# still count against the overlap.
+LINKING_WORDS = frozenset({"anything", "beyond", "else", "further", "longer", "more", "otherwise"})
+# An opening credit to the handbook. It names the source, so it is not the model's own words.
+# "The handbook says", "According to our handbook" or "According to the clinic's handbook".
+_HANDBOOK = r"(?:the|our)\s+(?:clinic(?:['’]s)?\s+|patient\s+)?handbook"
+CREDIT = re.compile(
+    rf"^\s*(?:according\s+to\s+{_HANDBOOK}|{_HANDBOOK}\s+says(?:\s+that)?),?\s*",
+    re.IGNORECASE,
+)
 
 
 def combine_reply(
@@ -148,7 +170,8 @@ def check_reply(
     """Check the model's reply, and return the text that is safe to speak.
 
     model_claim and model_advice are the checker's answers. Both false gives the result on main.
-    sources are the texts search returned this turn. A reply that only repeats them is the
+    sources are the texts search returned this turn and last turn, each with its heading. A
+    reply that only repeats them, or the clinic's fixed lines once there is a search, is the
     clinic's own written text, so the checker's advice flag alone does not replace it.
     """
     # Step 1: clean text meant for a screen. Markdown and IDs must never be read aloud.
@@ -165,7 +188,8 @@ def check_reply(
     # Step 3: medical advice is never allowed, so advice from either layer replaces the reply.
     # The one exception: the checker's flag alone, on a reply that only repeats the clinic's
     # own handbook. A dosing word is never excused, whatever the source says.
-    excused = advice and not dosing_hit and repeats_sources(cleaned, sources)
+    fixed_lines = [clinic.line(key) for key in clinic.lines]
+    excused = advice and not dosing_hit and repeats_sources(cleaned, sources, fixed_lines)
     if advice and not excused:
         reason = "dosing" if dosing_hit else "model_advice"
         return ReplyDecision(text=clinic.line("medical"), replaced=True, reason=reason)
@@ -194,7 +218,7 @@ def check_reply(
     return ReplyDecision(text=_trim(cleaned, max_sentences), replaced=False, reason=reason)
 
 
-def repeats_sources(text: str, sources: Sequence[str]) -> bool:
+def repeats_sources(text: str, sources: Sequence[str], fixed_lines: Sequence[str] = ()) -> bool:
     """Return True if every statement in the text repeats the search results.
 
     A statement is any sentence except an offer such as "Is there anything else I can help
@@ -205,8 +229,17 @@ def repeats_sources(text: str, sources: Sequence[str]) -> bool:
     "before eating" cannot become "after eating", and "take care not to bite" cannot lose its
     "not". One statement that repeats nothing makes the
     whole reply the model's own.
+
+    A source sentence's clauses are windows of their own as well, so a reply may split one
+    sentence in two without its second half facing the first half's negation.
+
+    fixed_lines are the clinic's own fixed lines. They count only when there are sources, so
+    they never excuse advice in a call with no search. Each one is a window of its own, and is
+    also joined to every other window, because a reply may end with "the dentist can advise
+    you at your visit, or you can call the clinic". An opening credit such as "The handbook
+    says" is dropped first.
     """
-    statements = [item for item in _sentences(text) if not _is_offer(item)]
+    statements = [CREDIT.sub("", item) for item in _sentences(text) if not _is_offer(item)]
     if not statements or not sources:
         return False
     # Each sentence, and each pair of neighbouring sentences, since a reply may join two.
@@ -214,6 +247,13 @@ def repeats_sources(text: str, sources: Sequence[str]) -> bool:
     for source in sources:
         sentences = [_words(item) for item in _sentences(source)]
         windows += sentences + [a + b for a, b in pairwise(sentences)]
+        # Each clause too, so a reply may split one sentence in two: "wait until the numbness
+        # has worn off" is checked against its own clause, not against "take care not to bite".
+        for sentence in _sentences(source):
+            parts = [_words(part) for part in SOURCE_CLAUSE_BREAK.split(sentence)]
+            windows += [part for part in parts if len(part) > 2] if len(parts) > 1 else []
+    lines = [_words(line) for line in fixed_lines]
+    windows += lines + [window + line for window in windows + lines for line in lines]
     return all(_repeats(statement, windows) for statement in statements)
 
 
@@ -228,9 +268,16 @@ def _is_offer(sentence: str) -> bool:
 
 
 def _meaningful(text: str) -> list[str]:
-    """Return the words that carry meaning: all but filler, keeping negations and order words."""
+    """Return the words that carry meaning: all but filler, keeping negations and order words.
+
+    "while" joins clauses like "and" and "but", which search's filler list already drops.
+    """
     kept = NEGATIONS | ORDER_WORDS
-    return [word for word in _words(text) if word not in FILLER_WORDS or word in kept]
+    return [
+        word
+        for word in _words(text)
+        if (word not in FILLER_WORDS and word not in JOINING_WORDS) or word in kept
+    ]
 
 
 def _repeats(statement: str, windows: list[list[str]]) -> bool:
@@ -249,12 +296,14 @@ def _repeats(statement: str, windows: list[list[str]]) -> bool:
     numbers = {word for word in words if word.isdigit() or word in NUMBER_WORDS}
     orders = {word for word in words if word in ORDER_WORDS}
     negations = {word for word in words if word in NEGATIONS}
+    stems = [_stem(word) for word in words]
     for window in windows:
         available = set(window)
+        available_stems = {_stem(word) for word in window}
         same_negations = negations == {word for word in window if word in NEGATIONS}
         # An order word the source lacks, where the source has its opposite, flips the meaning.
         swapped = any(word not in available and OPPOSITES[word] in available for word in orders)
-        shared = sum(word in available for word in words)
+        shared = sum(stem in available_stems for stem in stems)
         if (
             same_negations
             and not swapped
@@ -271,9 +320,19 @@ CLAUSE_BREAK = re.compile(r"[,;:()]|\b(?:and|so|but|then|or|while)\b")
 
 
 def _clauses(statement: str) -> list[set[tuple[str, str]]]:
-    """Return the word pairs of each clause with two or more meaningful words."""
-    pairs = [_pairs(_words(part)) for part in CLAUSE_BREAK.split(statement)]
-    return [item for item in pairs if item]
+    """Return the word pairs of each clause with two or more meaningful words.
+
+    A clause made only of linking words, such as "for anything beyond that", is left out.
+    """
+    clauses = []
+    for part in CLAUSE_BREAK.split(statement):
+        words = _words(part)
+        if set(_meaningful(part)) <= LINKING_WORDS:
+            continue
+        pairs = _pairs(words)
+        if pairs:
+            clauses.append(pairs)
+    return clauses
 
 
 def _pairs(words: list[str]) -> set[tuple[str, str]]:
@@ -284,16 +343,21 @@ def _pairs(words: list[str]) -> set[tuple[str, str]]:
 
 
 def _stem(word: str) -> str:
-    """Return a rough stem, so "wears" and "wear", or "eating" and "eat", compare equal."""
+    """Return a rough stem, so "wears" and "wear", "eating" and "eat", or "biting" and "bite"
+    compare equal. A final "e" goes too, because "bite" loses it in "biting"."""
     for suffix in ("ing", "ed", "es", "s"):
         if word.endswith(suffix) and len(word) - len(suffix) >= 3:
-            return word[: -len(suffix)]
-    return word
+            word = word[: -len(suffix)]
+            break
+    return word[:-1] if word.endswith("e") and len(word) > 3 else word
 
 
 def _words(text: str) -> list[str]:
-    """Return lowercase words, with "n't" turned into "not", so negations compare equal."""
+    """Return lowercase words, with "n't" and "avoid" turned into "not", so negations compare
+    equal, and other contractions ("they're", "you'll") cut back to their first word."""
     text = re.sub(r"n't\b", " not", text.lower().replace("’", "'"))
+    text = re.sub(r"'(?:re|ll|ve|d|s|m)\b", "", text)
+    text = re.sub(r"\bavoid(?:s|ed|ing)?\b", "not", text)
     return re.findall(r"[a-z0-9]+", text)
 
 

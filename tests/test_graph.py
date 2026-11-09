@@ -24,9 +24,12 @@ Used by:
     pytest
 """
 
+import json
 import time
+from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import ToolMessage
 from tests.conftest import TEST_NOW, build_test_deps
 from tests.fakes import (
     FailingCalendar,
@@ -1209,3 +1212,47 @@ def test_the_next_turn_can_repeat_the_last_search_without_the_medical_line(make_
     call.say("How long does the numbness last after a filling?")
     state = call.say("Sorry, how long did you say?")
     assert state.reply_text == reply
+
+
+# ---------- Reply sources: the handbook text the advice exemption may accept ----------
+
+
+def _search_message(pieces):
+    """A search_clinic_info result as the model sees it."""
+    data = [{"heading": h, "text": t, "source": "patient-handbook.md"} for h, t in pieces]
+    return ToolMessage(content=json.dumps({"ok": True, "data": data}), tool_call_id="call-1")
+
+
+def test_reply_sources_put_each_pieces_heading_before_its_text():
+    from dental_agent.graph.nodes import search_texts
+
+    message = _search_message([("After your visit › After a filling", "Your lip may feel numb.")])
+    assert search_texts([message]) == ["After your visit › After a filling Your lip may feel numb."]
+
+
+def test_the_last_searchs_pieces_keep_their_headings_too():
+    from dental_agent.graph.nodes import _reply_sources
+
+    state = CallState(
+        conversation_id="c-test",
+        last_search=[{"heading": "After a filling", "text": "Your lip may feel numb."}],
+    )
+    # The fixed lines are added by check_reply itself, so only the search's text comes back.
+    assert _reply_sources(state, None) == ["After a filling Your lip may feel numb."]
+
+
+def test_the_trace_shows_a_second_opinion():
+    from dental_agent.graph.nodes import _trace_checker
+    from dental_agent.storage.trace import TraceSink
+
+    trace = TraceSink()
+    deps = SimpleNamespace(trace=trace, checker=SimpleNamespace(last_attempts=[]))
+    answer = CheckAnswer(
+        layer="jev",
+        answers={"claims_change": False, "medical_advice": True},
+        probabilities={"claims_change": 0.02, "medical_advice": 0.41},
+        model="m",
+        second_opinions={"medical_advice": True},
+    )
+    _trace_checker(deps, "check_model_reply", answer)
+    assert trace.events[-1]["second_opinions"] == {"medical_advice": True}

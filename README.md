@@ -27,7 +27,7 @@ counts as a yes, and what the caller is told about a change.
 - **Structured call records.** Each call is stored as JSON with the transcript, the extracted
   details, the actions taken and a key-points summary, with a separate trace of every decision.
 
-At a glance: 935 tests, 98% branch coverage of the code that guards a booking, 21 scenarios
+At a glance: 969 tests, 98% branch coverage of the code that guards a booking, 21 scenarios
 passing on the real model, and the right handbook section found for 97% of labelled questions.
 
 ## How it was built
@@ -340,10 +340,11 @@ checker answers three yes-or-no questions: is this a life-threatening emergency,
 claim a change, does it give medical advice. Jev, a decision model on OpenRouter, answers first
 in about 0.25 s, a small Haiku call answers if Jev fails, and the phrase lists decide alone if
 both fail. On the same cases it caught 24 of 24 emergencies with no false alarms. The emergency
-check runs alongside the main model, so it adds almost no wait. The checker never writes to the
-calendar and never words what the caller hears. *Rejected:* the main model's `flag_urgent`
-alone, which fails whenever the model does. *Cost:* a second provider, and a known false alarm
-on claims, listed under limits.
+check runs alongside the main model, so it adds almost no wait. When Jev's score for a claim or
+for advice lands right at its cut-off, Haiku gives a second opinion, which decides. The checker
+never writes to the calendar and never words what the caller hears. *Rejected:* the main
+model's `flag_urgent` alone, which fails whenever the model does. *Cost:* a second provider,
+and about a second more on the rare turn that needs a second opinion.
 
 **5. One phone number is one patient.** The caller's number finds their record, and the record
 says new or existing: new until the first visit has taken place, then existing for good. A new
@@ -417,12 +418,17 @@ Some protections are exact, and some depend on a model:
   claims false bookings and skips the question.
 - **Best effort, by model:** spotting an emergency, a false claim or medical advice in free
   wording. The checker makes these much better than word lists, but it can still miss or raise
-  a false alarm. The known cases are listed under Limits.
+  a false alarm. Near the cut-off it is not left to one model: a Jev score of 0.3 to 0.5 for
+  advice, or 0.5 to 0.65 for a claim, is decided by a second opinion from Haiku. A reply
+  judging the caller's own symptom scored 0.41 on a live call, and correct refusals scored
+  0.51 to 0.59 for a claim, before these were added. The known cases left are under Limits.
 
 Handbook aftercare is the one place a reply may sound like advice. It passes as `sourced` only
-when every sentence repeats the search results: at least 75% of its words, every number, the
-same negations, and source wording in every clause, so nothing can be tacked on. A question
-about the caller's own symptom still gets the medical line.
+when every sentence repeats the search results or the clinic's fixed lines: at least 75% of its
+words, every number, the same negations ("avoid" counts as "not"), and source wording in every
+clause, so nothing can be tacked on. Crediting the handbook ("According to the handbook…") is
+not counted as the model's own words. A question about the caller's own symptom still gets the
+medical line.
 
 ## Evaluation and results
 
@@ -433,14 +439,14 @@ and [its README](evals/results/README.md) explains how to read and rerun each on
 
 | Measure | What it checks | Result |
 | --- | --- | --- |
-| Tests | The rules in code, exactly, with no key | 935 pass. Branch coverage 98% for the guards and booking (target 85%), 97% for the whole app |
-| Scenarios | Whole calls on the real model | 21 of 21 scenarios pass; 61 of 63 runs |
+| Tests | The rules in code, exactly, with no key | 969 pass. Branch coverage 98% for the guards and booking (target 85%), 97% for the whole app |
+| Scenarios | Whole calls on the real model | 21 of 21 scenarios pass; 62 of 63 runs |
 | Golden set | The checker, one message at a time | 24 of 24 emergencies, no false alarm; 12 of 12 claims; 7 of 7 advice |
 | Retrieval | Handbook search on labelled questions | Right piece in the top 3 for 97% of questions (hybrid), 90% for keyword alone |
 
 ### Tests
 
-`uv run pytest` runs 935 tests in about 15 seconds, with no key and no network. They prove the rules
+`uv run pytest` runs 969 tests in about 15 seconds, with no key and no network. They prove the rules
 decided in code: the yes rule, every booking rule, the notice period, double booking, the reply
 check, and what happens when a model, the speech service or the calendar fails. Graph tests use
 a scripted model that misbehaves on purpose: it invents a slot, claims a booking that never
@@ -466,9 +472,11 @@ Each scenario targets something only the model decides, since the tests already 
 - **Handbook questions:** parking, insurance, a question in the middle of a booking, a question
   the handbook cannot answer, general aftercare, and a question about the caller's own symptom.
 
-The two failed runs, one each in `slot_taken_before_yes` and `side_question_during_booking`, were
-the same cause: the checker scored a correct reply as claiming a change, and the guard replaced it
-with the call's status. That is a false alarm on the safe side, listed under Limits.
+Before the checker's grey zones, a run failed now and then when Jev scored a correct refusal
+just over its cut-off as claiming a change; those now get a second opinion from Haiku. The one
+failed run was in `dental_pain`: Jev scored a correct reply giving the urgent line 0.52 for
+advice, and the guard replaced it with the medical line. A "yes" to advice is never second-
+guessed, by design, so that false alarm stays on the safe side; it is listed under Limits.
 
 ### Golden set
 
@@ -523,12 +531,9 @@ so they show the scale, not a benchmark.
 
 ### Known bugs
 
-- **The checker sometimes flags a correct reply as claiming a change.** Jev scores some ordinary
-  replies just over its 0.5 cut-off (0.54 to 0.59): notice-period refusals, offers of new times
-  after a slot was taken, and an answer that gives times and a visit length. The guard then
-  replaces the reply with the call's true status, such as "Nothing has been changed on this call
-  so far". Safe, but unhelpful, and it caused both failed scenario runs. A grey zone around the
-  cut-off, with a second opinion from the Haiku checker, is the likely fix.
+- **The advice check sometimes flags a correct reply.** Jev scored a reply giving the urgent
+  line 0.52 to 0.62 for advice in one scenario run, and the medical line replaced it. A yes to
+  advice is not second-guessed, so this stays a false alarm on the safe side.
 - **One non-emergency sits on the emergency cut-off.** "I get short of breath on stairs, is there
   a lift?" scores between 0.42 and 0.51, so it sometimes gets the 112 message. The cut-off cannot
   simply move: a real overdose case scored exactly 0.50.
@@ -562,6 +567,8 @@ so they show the scale, not a benchmark.
   target. Most of it is the main model.
 - Turns with a handbook search take about 5 s, against a 4 s target. "One moment." plays at
   about 3 s, once the model has asked for a tool, not straight away.
+- A reply whose check lands in a grey zone waits about 1.2 s more for Haiku's second opinion.
+  In the full scenario run that was 2 replies out of 63 checked.
 
 ### What the evidence does not show
 
@@ -575,8 +582,9 @@ so they show the scale, not a benchmark.
 
 ### Fix the known bugs
 
-- **A grey zone around Jev's cut-off.** Scores near 0.5 go to the Haiku checker for a second
-  opinion. This targets both the false claim alarm and "short of breath on stairs".
+- **A grey zone for emergencies too.** Claims and advice already get a second opinion from
+  Haiku near Jev's cut-off. The same for the emergency question would settle "short of breath
+  on stairs", which Haiku does not flag; it needs re-measuring on the emergency cases first.
 - **Carry refusals into the next turn.** Write a refused change into Current Facts, so the model
   cannot take a refusal back.
 
@@ -663,7 +671,7 @@ dental-voice-agent/
 ├── data/
 │   ├── clinic.yaml          services, prices, hours, rules, fixed lines
 │   └── docs/patient-handbook.md
-├── tests/                   935 tests, no key or network needed
+├── tests/                   969 tests, no key or network needed
 ├── evals/
 │   ├── scenarios.yaml       21 whole calls on the real model
 │   ├── intent_*.yaml        golden and held-out cases for the checker

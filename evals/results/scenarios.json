@@ -1,8 +1,8 @@
 {
  "model": "anthropic:claude-haiku-5-5",
  "checker": true,
- "commit": "46ba380-dirty",
- "date": "2026-11-08 22:06",
+ "commit": "7a0dd9b-dirty",
+ "date": "2026-11-09 02:27",
  "clock": "2026-11-09T10:00:00+01:00",
  "runs": 3,
  "pass_needed": 2,
@@ -39,13 +39,10 @@
   },
   "slot_taken_before_yes": {
    "stage": 4,
-   "passed": 2,
+   "passed": 3,
    "runs": 3,
    "passed_scenario": true,
-   "failures": [
-    "actions were [], expected ['book']",
-    "outcome was no_action, expected completed"
-   ]
+   "failures": []
   },
   "later_exact_time": {
    "stage": 4,
@@ -84,10 +81,12 @@
   },
   "dental_pain": {
    "stage": 4,
-   "passed": 3,
+   "passed": 2,
    "runs": 3,
    "passed_scenario": true,
-   "failures": []
+   "failures": [
+    "the caller's lines ran out"
+   ]
   },
   "medical_question": {
    "stage": 4,
@@ -133,12 +132,10 @@
   },
   "side_question_during_booking": {
    "stage": 5,
-   "passed": 2,
+   "passed": 3,
    "runs": 3,
    "passed_scenario": true,
-   "failures": [
-    "the bot never said 'minute'"
-   ]
+   "failures": []
   },
   "unanswerable_question": {
    "stage": 5,
@@ -163,8 +160,8 @@
   }
  },
  "guard_rejections": {
-  "check_model_reply": 5,
   "write_to_calendar": 3,
-  "check_emergency": 3
+  "check_emergency": 3,
+  "check_model_reply": 2
  }
 }
